@@ -1,5 +1,7 @@
+//!
 //! # 持久化模块
-//! 用于将下载信息持久化到硬盘，用于断点回复
+//! 用于将下载信息持久化到硬盘，用于断点恢复
+//!
 
 use std::fs;
 use std::path::Path;
@@ -15,7 +17,7 @@ pub struct PersistenceState {
 impl PersistenceState {
     pub fn load_from_file(file_path: &str) -> Result<Self> {
         if Path::new(file_path).exists() {
-            let data = std::fs::read_to_string(file_path)?;
+            let data = fs::read_to_string(file_path)?;
             let state: PersistenceState = serde_json::from_str(&data)?;
             
             Ok(state)
