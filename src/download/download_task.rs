@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::io::SeekFrom;
 
-// use parking_lot::Mutex;
 use anyhow::{Result, Context};
 use futures_util::stream::StreamExt;
 use log::{info, error};
@@ -14,9 +13,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, Mutex};
 use tokio::task::JoinHandle;
-use tokio::sync::Mutex;
 use crate::utils::get_content_length;
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -63,13 +61,13 @@ impl DownloadTask {
             file_size,
             chunk_size,
             retry_times,
+            downloaded: 0,
             url: url.clone(),
             file_path: file_path.clone(),
-            downloaded: 0,
-            status: TaskStatus::Downloading
+            status: TaskStatus::Pending
         };
 
-        Ok(Self {
+        Ok(DownloadTask {
             client,
             state: Arc::new(Mutex::new(state)),
             handle: None
@@ -80,20 +78,19 @@ impl DownloadTask {
         let state = self.state.clone();
         let client = self.client.clone();
 
-        // 'acquire_owned' 才能跨线程
-        // 申请线程许可，如果线程使用满了则等待
+        // 'acquire_owned' 才能跨线程, 申请线程许可，如果线程使用满了则等待
         let permit = semaphore.acquire_owned().await.unwrap();
 
         // 确保在锁外创建异步任务
         self.handle = Some(tokio::spawn(async move {
-            let mut state_guard = state.lock().await;
-            if state_guard.status == TaskStatus::Completed {
-                info!("Task completed: {}", state_guard.file_path);
-                return;
+            {
+                let mut state_guard = state.lock().await;
+                if state_guard.status == TaskStatus::Completed {
+                    info!("Task completed: {}", state_guard.file_path);
+                    return;
+                }
+                state_guard.status = TaskStatus::Downloading;
             }
-
-            state_guard.status = TaskStatus::Downloading;
-            drop(state_guard);
 
             // 根据下载情况，把任务置为不同状态
             if let Err(e) = download_task(state.clone(), client).await {

@@ -13,7 +13,7 @@ use crate::download::logger;
 #[tokio::main]
 async fn main() -> Result<()> {
     // No log file by default.
-    logger::setup_logger(None)?;
+    logger::setup_logger()?;
 
     // Load configuration.
     let config_file = env::args().nth(1).unwrap_or_else(|| "config.json".to_string());
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
-    downloader_arc.save_state()?;
+    downloader_arc.save_state().await?;
 
     Ok(())
 }

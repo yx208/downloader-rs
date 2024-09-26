@@ -46,7 +46,7 @@ impl Downloader {
 
         self.tasks.lock().await.insert(url.clone(), task.clone());
 
-        self.save_state()?;
+        self.save_state().await?;
 
         Ok(())
     }
