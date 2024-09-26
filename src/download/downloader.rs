@@ -92,8 +92,19 @@ impl Downloader {
     }
 
     /// 保存下载状态
-    pub fn save_state(&self) -> Result<()> {
-        todo!()
+    pub async fn save_state(&self) -> Result<()> {
+        let tasks = self.tasks.lock().await;
+        let mut states = Vec::new();
+
+        for task in tasks.values() {
+            let task_clone = task.lock().await.state.lock().await.clone();
+            states.push(task_clone);
+        }
+
+        let persistent_state = PersistenceState { tasks: states };
+        persistent_state.save_to_file(&self.state_file)?;
+
+        Ok(())
     }
 
     /// 加载状态
