@@ -1,4 +1,5 @@
 mod download;
+mod cli;
 
 use std::env;
 use std::sync::Arc;
