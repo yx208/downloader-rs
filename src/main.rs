@@ -54,7 +54,9 @@ async fn main() -> Result<()> {
             );
         }
 
-        downloader_arc.save_state().unwrap_or_else(|e| error!("Save state failed: {}", e));
+        downloader_arc.save_state()
+            .await
+            .unwrap_or_else(|e| error!("Save state failed: {}", e));
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }

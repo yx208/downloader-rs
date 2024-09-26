@@ -55,7 +55,7 @@ impl Downloader {
     pub async fn pause_task(&self, url: &str) {
         if let Some(task) = self.tasks.lock().await.get(url) {
             task.lock().await.pause().await;
-            self.save_state().unwrap_or_else(|e| error!("Save state failed: {}", e));
+            self.save_state().await.unwrap_or_else(|e| error!("Save state failed: {}", e));
         }
     }
 
@@ -63,7 +63,7 @@ impl Downloader {
     pub async fn resume_task(&self, url: &str) {
         if let Some(task) = self.tasks.lock().await.get(url) {
             task.lock().await.resume(self.semaphore.clone()).await;
-            self.save_state().unwrap_or_else(|e| error!("Save state failed: {}", e));
+            self.save_state().await.unwrap_or_else(|e| error!("Save state failed: {}", e));
         }
     }
 
@@ -75,7 +75,7 @@ impl Downloader {
             if Path::new(&task_state.file_path).exists() {
                 std::fs::remove_file(&task_state.file_path).unwrap_or_else(|e| error!("Delete file failed: {}", e));
             }
-            self.save_state().unwrap_or_else(|e| error!("Save state failed: {}", e));
+            self.save_state().await.unwrap_or_else(|e| error!("Save state failed: {}", e));
             info!("The task has been deleted: {}", url);
         }
     }
