@@ -1,4 +1,6 @@
+//!
 //! # 下载任务模块
+//!
 
 use std::fs;
 use std::path::Path;
@@ -11,11 +13,10 @@ use futures_util::stream::StreamExt;
 use log::{info, error};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::fs::OpenOptions;
+use tokio::fs::{OpenOptions, File};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{Semaphore, Mutex};
 use tokio::task::JoinHandle;
-use crate::utils::get_content_length;
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct DownloadTaskState {
@@ -94,16 +95,15 @@ impl DownloadTask {
 
             // 根据下载情况，把任务置为不同状态
             if let Err(e) = download_task(state.clone(), client).await {
-                error!("下载失败：{}", e);
+                error!("Download failed: {}", e);
                 let mut state_guard = state.lock().await;
                 state_guard.status = TaskStatus::Failed;
             } else {
                 let mut state_guard = state.lock().await;
                 state_guard.status = TaskStatus::Completed;
-                info!("下载完成：{}", state_guard.file_path);
+                info!("Download completed: {}", state_guard.file_path);
             }
 
-            // 释放线程数量
             drop(permit);
         }));
     }
@@ -112,7 +112,7 @@ impl DownloadTask {
         let mut state = self.state.lock().await;
         if state.status == TaskStatus::Downloading {
             state.status = TaskStatus::Paused;
-            info!("Task has been paused：{}", state.file_path);
+            info!("Task has been paused: {}", state.file_path);
         }
     }
 
@@ -120,29 +120,38 @@ impl DownloadTask {
         let state = self.state.clone();
         let client = self.client.clone();
 
-        // 如果没有异步任务或者任务已经完成, 重新添加任务
+        // 这个任务没有正在进行的任务, 或者这个任务已经完成
         if self.handle.is_none() || self.handle.as_ref().unwrap().is_finished() {
             self.handle = Some(tokio::spawn(async move {
-                // 请求所有权许可
                 let permit = semaphore.acquire_owned().await.unwrap();
 
-                let mut state_guard = state.lock().await;
-                state_guard.status = TaskStatus::Downloading;
-                drop(state_guard);
+                {
+                    let mut state_guard = state.lock().await;
+                    if state_guard.status != TaskStatus::Failed && state_guard.status != TaskStatus::Paused {
+                        return;
+                    }
+                    state_guard.status = TaskStatus::Downloading;
+                }
 
-                if let Err(e) = download_task(state.clone(), client).await {
-                    error!("Download failed: {}", e);
+                if let Err(err) = download_task(state.clone(), client).await {
+                    error!("Download failed: {}", err);
                     let mut state_guard = state.lock().await;
                     state_guard.status = TaskStatus::Failed;
                 } else {
                     let mut state_guard = state.lock().await;
                     state_guard.status = TaskStatus::Completed;
-                    info!("Download completed：{}", state_guard.file_path);
+                    info!("Download completed: {}", state_guard.file_path);
                 }
 
                 drop(permit);
             }));
         }
+    }
+
+    pub async fn stop(&self) {
+        let mut state = self.state.lock().await;
+        state.status = TaskStatus::Failed;
+        info!("Task stopped: {}", state.file_path);
     }
 
     pub fn is_finished(&self) -> bool {
@@ -154,12 +163,13 @@ impl DownloadTask {
     }
 }
 
+/// 下载任务
+///
 async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> Result<()> {
     let state_guard = state.lock().await;
     let url = state_guard.url.clone();
     let file_path = state_guard.file_path.clone();
     let file_size = state_guard.file_size;
-    let mut downloaded = state_guard.downloaded;
     let chunk_size = state_guard.chunk_size;
     let retry_times = state_guard.retry_times;
     drop(state_guard);
@@ -170,38 +180,35 @@ async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> 
         .await
         .with_context(|| format!("File chunk write failed: {}", &file_path))?;
 
-    while downloaded < file_size {
-        // 检查是否暂停
+    loop {
+        let start;
+
         {
             let state_guard = state.lock().await;
-            if state_guard.status == TaskStatus::Paused {
-                info!("The download task has been paused: {}", state_guard.file_path);
+            if state_guard.status == TaskStatus::Paused || state_guard.status == TaskStatus::Failed {
+                info!("The download task has been paused or stop: {}", state_guard.file_path);
                 break;
             }
+
+            if state_guard.downloaded >= file_size {
+                break;
+            }
+
+            start = state_guard.downloaded;
         }
 
-        let start = downloaded;
         let end = ((start + chunk_size).min(file_size)) - 1;
 
-        let result = download_chunk_with_retry(
-            &client,
-            &url,
-            start,
-            end,
-            &mut file,
-            retry_times
-        ).await;
-
+        let result = download_chunk_with_retry(&client, &url, start, end, &mut file, retry_times).await;
         match result {
             Ok(bytes_downloaded) => {
-                downloaded += bytes_downloaded;
-
                 let mut state_guard = state.lock().await;
-                state_guard.downloaded = downloaded;
-                drop(state_guard);
+                state_guard.downloaded += bytes_downloaded;
             },
             Err(e) => {
                 error!("Download chunk failed: {}", e);
+                let mut state_guard = state.lock().await;
+                state_guard.status = TaskStatus::Failed;
                 return Err(e);
             }
         }
@@ -216,13 +223,13 @@ async fn download_chunk_with_retry(
     url: &str,
     start: u64,
     end: u64,
-    file: &mut tokio::fs::File,
+    file: &mut File,
     retry_times: usize
 ) -> Result<u64> {
     let mut attempts = 0;
     loop {
         match download_chunk(client, url, start, end, file).await {
-            Ok(_) => {},
+            Ok(bytes_downloaded) => return Ok(bytes_downloaded),
             Err(error) => {
                 attempts += 1;
                 if attempts > retry_times {
@@ -237,7 +244,7 @@ async fn download_chunk_with_retry(
 }
 
 /// 下载单个 chunk
-async fn download_chunk(client: &Client, url: &str, start: u64, end: u64, file: &mut tokio::fs::File) -> Result<u64> {
+async fn download_chunk(client: &Client, url: &str, start: u64, end: u64, file: &mut File) -> Result<u64> {
     let range_header = format!("bytes={}-{}", start, end);
     let resp = client
         .get(url)
@@ -264,3 +271,23 @@ async fn download_chunk(client: &Client, url: &str, start: u64, end: u64, file: 
     }
 }
 
+async fn get_content_length(client: &Client, url: &str) -> Result<u64> {
+    let resp = client
+        .head(url)
+        .send()
+        .await
+        .with_context(|| format!("Sending HEAD request failed: {}", &url))?;
+
+    if resp.status().is_success() {
+        if let Some(len) = resp.headers().get(reqwest::header::CONTENT_LENGTH) {
+            let len = len.to_str()?
+                .parse::<u64>()
+                .context("Parsing Content-Length failed")?;
+            Ok(len)
+        } else {
+            Err(anyhow::anyhow!("Get Content-Length failed"))
+        }
+    } else {
+        Err(anyhow::anyhow!("Failed to get file size: HTTP {}", resp.status()))
+    }
+}

@@ -9,8 +9,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use log::{info, error};
-use tokio::sync::Mutex;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 
 use crate::download::download_task::{DownloadTask, DownloadTaskState, TaskStatus};
 use crate::download::persistence::PersistenceState;
