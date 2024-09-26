@@ -16,11 +16,11 @@ use crate::download::persistence::PersistenceState;
 
 // 简化类型定义抽出来的
 // DownloadTask 需要在多线程共享修改，需要包裹 Arc/Mutex
-type DownloaderTask = HashMap<String, Arc<Mutex<DownloadTask>>>;
+type DownloaderTaskMap = HashMap<String, Arc<Mutex<DownloadTask>>>;
 
 pub struct Downloader {
     // 跨线程读写包裹
-    tasks: Arc<Mutex<DownloaderTask>>,
+    tasks: Arc<Mutex<DownloaderTaskMap>>,
     // 线程限制
     semaphore: Arc<Semaphore>,
     // 状态文件路径
@@ -30,9 +30,9 @@ pub struct Downloader {
 impl Downloader {
     pub fn new(max_concurrent_downloads: usize, state_file: String) -> Self {
         Downloader {
+            state_file,
             tasks: Arc::new(Mutex::new(HashMap::new())),
-            semaphore: Arc::new(Semaphore::new(max_concurrent_downloads)),
-            state_file
+            semaphore: Arc::new(Semaphore::new(max_concurrent_downloads))
         }
     }
 
@@ -54,7 +54,7 @@ impl Downloader {
     pub async fn pause_task(&self, url: &str) {
         if let Some(task) = self.tasks.lock().await.get(url) {
             task.lock().await.pause().await;
-            self.save_state().await.unwrap_or_else(|e| error!("Save state failed: {}", e));
+            self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
         }
     }
 
@@ -62,32 +62,34 @@ impl Downloader {
     pub async fn resume_task(&self, url: &str) {
         if let Some(task) = self.tasks.lock().await.get(url) {
             task.lock().await.resume(self.semaphore.clone()).await;
-            self.save_state().await.unwrap_or_else(|e| error!("Save state failed: {}", e));
+            self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
         }
     }
 
     /// 删除任务
     pub async fn delete_task(&self, url: &str) {
         if let Some(task) = self.tasks.lock().await.remove(url) {
-            let task_guard = task.lock().await;
-            let task_state = task_guard.state.lock().await;
+            let task_state = task.lock().await.state.lock().await;
             if Path::new(&task_state.file_path).exists() {
-                std::fs::remove_file(&task_state.file_path).unwrap_or_else(|e| error!("Delete file failed: {}", e));
+                tokio::fs::remove_file(&task_state.file_path)
+                    .await
+                    .unwrap_or_else(|e| error!("Failed to delete file: {}", e));
             }
-            self.save_state().await.unwrap_or_else(|e| error!("Save state failed: {}", e));
+            self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
             info!("The task has been deleted: {}", url);
         }
     }
 
     /// 获取所有任务的状态
     pub async fn get_tasks(&self, ) -> Vec<DownloadTaskState> {
-        let mut tasks= Vec::new();
-        for task in self.tasks.lock().await.values() {
-            let task_guard = task.lock().await;
-            tasks.push(task_guard.state.lock().await.clone());
+        let tasks = self.tasks.lock().await;
+        let mut task_states= Vec::new();
+        for task in tasks.values() {
+            let task_guard = task.lock().await.state.lock().await.clone();
+            task_states.push(task_guard);
         }
 
-        tasks
+        task_states
     }
 
     /// 保存下载状态
@@ -111,19 +113,18 @@ impl Downloader {
         let persistent_state = PersistenceState::load_from_file(&self.state_file)?;
         for task_state in persistent_state.tasks {
             // 创建任务实例
-            let task = DownloadTask {
+            let mut task = DownloadTask {
                 state: Arc::new(Mutex::new(task_state.clone())),
                 client: reqwest::Client::new(),
                 handle: None
             };
 
+            if task_state.status == TaskStatus::Downloading || task_state.status == TaskStatus::Pending {
+                task.start(self.semaphore.clone()).await;
+            }
+
             let task = Arc::new(Mutex::new(task));
             self.tasks.lock().await.insert(task_state.url.clone(), task.clone());
-
-            // 恢复下载任务
-            if task_state.status == TaskStatus::Downloading || task_state.status == TaskStatus::Pending {
-                task.lock().await.start(self.semaphore.clone()).await;
-            }
         }
 
         Ok(())
