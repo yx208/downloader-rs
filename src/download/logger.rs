@@ -1,23 +1,31 @@
+//!
 //! 日志模块
+//!
 
+use fern::colors::{Color, ColoredLevelConfig};
 use anyhow::Result;
 
-pub fn setup_logger(log_file: Option<&str>) -> Result<()> {
-    let mut base_config = fern::Dispatch::new()
-        .format(|out, message, record| {
+pub fn setup_logger() -> Result<()> {
+    let colors_line = ColoredLevelConfig::new()
+        .error(Color::Red)
+        .warn(Color::Yellow)
+        .info(Color::Green)
+        .debug(Color::Magenta)
+        .trace(Color::BrightBlack);
+
+    fern::Dispatch::new()
+        .format(move |out, message, record| {
             out.finish(format_args!(
-                "{} [{}] {}",
-                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S"),
-                record.level(),
+                "{} [{}] [{}] {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                colors_line.color(record.level()),
+                record.target(),
                 message
             ))
-        });
-
-    if let Some(file) = log_file {
-        base_config = base_config.chain(fern::log_file(file)?);
-    }
-
-    base_config.apply()?;
+        })
+        .level(log::LevelFilter::Info)
+        .chain(std::io::stdout())
+        .apply()?;
 
     Ok(())
 }

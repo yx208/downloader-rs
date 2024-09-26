@@ -1,0 +1,15 @@
+{
+    "max_concurrent_downloads": 5,
+    "chunk_size": 5242880,
+    "retry_times": 3,
+    "download_dir": "downloads",
+    "tasks": [
+        {
+            "url": "https://example.com/file1.zip",
+            "file_name": "file1.zip"
+        },
+        {
+            "url": "https://example.com/file2.zip"
+        }
+    ]
+}
