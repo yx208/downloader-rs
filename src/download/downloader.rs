@@ -69,7 +69,8 @@ impl Downloader {
     /// 删除任务
     pub async fn delete_task(&self, url: &str) {
         if let Some(task) = self.tasks.lock().await.remove(url) {
-            let task_state = task.lock().await.state.lock().await;
+            let task_guard = task.lock().await;
+            let task_state = task_guard.state.lock().await;
             if Path::new(&task_state.file_path).exists() {
                 tokio::fs::remove_file(&task_state.file_path)
                     .await

@@ -2,14 +2,15 @@
     "max_concurrent_downloads": 5,
     "chunk_size": 5242880,
     "retry_times": 3,
-    "download_dir": "downloads",
+    "download_dir": "C:/Users/User/Downloads",
     "tasks": [
         {
-            "url": "https://example.com/file1.zip",
-            "file_name": "file1.zip"
+            "url": "https://mdown.xgy.tv/down/resources/person/NanFangMeiZiYun_3/01fc866cec03f9456fbd596f39a8218f_12/20240920/1719492bf1ba7fd00a90f29477.mp4",
+            "file_name": "demo1G.mp4"
         },
         {
-            "url": "https://example.com/file2.zip"
+            "url": "https://mdown.xgy.tv/down/resources/person/NanFangMeiZiYun_3/17722242091_12/20230914/115900f67ebf2bfd34a5c52941.mp4",
+            "file_name": "demo600M.mp4"
         }
     ]
 }
