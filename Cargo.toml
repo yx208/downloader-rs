@@ -1,0 +1,16 @@
+[package]
+name = "downloader-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["stream", "gzip", "json"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+futures-util = "0.3"
+dirs = "5"
+log = "0.4"
+fern = "0.6"
+chrono = "0.4"
