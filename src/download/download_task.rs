@@ -291,3 +291,50 @@ async fn get_content_length(client: &Client, url: &str) -> Result<u64> {
         Err(anyhow::anyhow!("Failed to get file size: HTTP {}", resp.status()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::fs;
+
+    #[tokio::test]
+    async fn test_download_task() -> Result<()> {
+        let url = "https://example.zip";
+        let file_path = "/home/save-dir/example.zip";
+        let chunk_size = 1024 * 1024 * 5;
+        let retry_times = 3;
+
+        // 删除测试文件（如果存在）
+        if Path::new(file_path).exists() {
+            fs::remove_file(file_path).await?;
+        }
+
+        let mut task = DownloadTask::new(
+            url.to_string(),
+            file_path.to_string(),
+            chunk_size,
+            retry_times,
+        )
+            .await?;
+
+        let semaphore = Arc::new(Semaphore::new(1));
+        task.start(semaphore.clone()).await;
+
+        // 等待任务完成
+        while !task.is_finished() {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+
+        let state = task.state.lock().await;
+        assert_eq!(state.status, TaskStatus::Completed);
+
+        // 检查文件是否存在
+        assert!(Path::new(file_path).exists());
+
+        // 清理测试文件
+        fs::remove_file(file_path).await?;
+
+        Ok(())
+    }
+}
+

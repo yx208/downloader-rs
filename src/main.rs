@@ -1,7 +1,6 @@
 mod download;
 mod cli;
 
-use std::env;
 use std::sync::Arc;
 use anyhow::Result;
 use log::{error, info};
