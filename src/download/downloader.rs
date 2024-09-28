@@ -8,19 +8,16 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
+use dashmap::DashMap;
 use log::{info, error};
 use tokio::sync::{Mutex, Semaphore};
 use uuid::Uuid;
 use crate::download::download_task::{DownloadTask, DownloadTaskState, TaskStatus};
 use crate::download::persistence::PersistenceState;
 
-// 简化类型定义抽出来的
-// DownloadTask 需要在多线程共享修改，需要包裹 Arc/Mutex
-type DownloaderTaskMap = HashMap<Uuid, Arc<Mutex<DownloadTask>>>;
-
 pub struct Downloader {
     // 跨线程读写包裹
-    tasks: Arc<Mutex<DownloaderTaskMap>>,
+    tasks: Arc<DashMap<Uuid, Arc<DownloadTask>>>,
     // 线程限制
     semaphore: Arc<Semaphore>,
     // 状态文件路径
@@ -31,7 +28,7 @@ impl Downloader {
     pub fn new(max_concurrent_downloads: usize, state_file: String) -> Self {
         Downloader {
             state_file,
-            tasks: Arc::new(Mutex::new(HashMap::new())),
+            tasks: Arc::new(DashMap::new()),
             semaphore: Arc::new(Semaphore::new(max_concurrent_downloads))
         }
     }
@@ -42,10 +39,8 @@ impl Downloader {
         let id = task.id.clone();
         task.start().await;
 
-        let task = Arc::new(Mutex::new(task));
-
-        self.tasks.lock().await.insert(id, task.clone());
-
+        let task = Arc::new(task);
+        self.tasks.insert(id, task.clone());
         self.save_state().await?;
 
         Ok(())
@@ -53,42 +48,42 @@ impl Downloader {
 
     /// 暂停任务
     pub async fn pause_task(&self, id: &Uuid) {
-        if let Some(task) = self.tasks.lock().await.get(id) {
-            task.lock().await.pause().await;
-            self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
+        if let Some(task) = self.tasks.get(id) {
+            task.value().pause().await;
         }
+        self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
     }
 
     /// 恢复任务
     pub async fn resume_task(&self, id: &Uuid) {
-        if let Some(task) = self.tasks.lock().await.get(id) {
-            task.lock().await.resume(self.semaphore.clone()).await;
-            self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
+        if let Some(task) = self.tasks.get(id) {
+            let mut task = task.value().clone();
+            task.resume().await;
         }
+        self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
     }
 
     /// 删除任务
     pub async fn delete_task(&self, id: &Uuid) {
-        if let Some(task) = self.tasks.lock().await.remove(id) {
-            let task_guard = task.lock().await;
-            let task_state = task_guard.state.lock().await;
-            if Path::new(&task_state.file_path).exists() {
-                tokio::fs::remove_file(&task_state.file_path)
+        if let Some((_, task)) = self.tasks.remove(id) {
+            let state_guard = task.state.lock().await;
+            if Path::new(&state_guard.file_path).exists() {
+                tokio::fs::remove_file(&state_guard.file_path)
                     .await
                     .unwrap_or_else(|e| error!("Failed to delete file: {}", e));
             }
-            self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
             info!("The task has been deleted: {}", id.to_string());
         }
+        self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
     }
 
     /// 获取所有任务的状态
     pub async fn get_tasks(&self, ) -> Vec<DownloadTaskState> {
-        let tasks = self.tasks.lock().await;
         let mut task_states= Vec::new();
-        for task in tasks.values() {
-            let task_guard = task.lock().await.state.lock().await.clone();
-            task_states.push(task_guard);
+        for entry in self.tasks.iter() {
+            let task = entry.value();
+            let state_guard = task.state.lock().await.clone();
+            task_states.push(state_guard);
         }
 
         task_states
@@ -96,12 +91,11 @@ impl Downloader {
 
     /// 保存下载状态
     pub async fn save_state(&self) -> Result<()> {
-        let tasks = self.tasks.lock().await;
         let mut states = Vec::new();
-
-        for task in tasks.values() {
-            let task_clone = task.lock().await.state.lock().await.clone();
-            states.push(task_clone);
+        for entry in self.tasks.iter() {
+            let task = entry.value();
+            let state_guard = task.state.lock().await.clone();
+            states.push(state_guard);
         }
 
         let persistent_state = PersistenceState { tasks: states };
@@ -115,21 +109,21 @@ impl Downloader {
         let persistent_state = PersistenceState::load_from_file(&self.state_file)?;
         for task_state in persistent_state.tasks {
             // 创建任务实例
+            let id = Uuid::new_v4();
             let mut task = DownloadTask {
-                id: Uuid::new_v4(),
+                id: id.clone(),
                 semaphore: self.semaphore.clone(),
                 state: Arc::new(Mutex::new(task_state.clone())),
                 client: reqwest::Client::new(),
                 handle: None
             };
-            let id = task.id.clone();
 
             if task_state.status == TaskStatus::Downloading || task_state.status == TaskStatus::Pending {
                 task.start().await;
             }
 
-            let task = Arc::new(Mutex::new(task));
-            self.tasks.lock().await.insert(id, task.clone());
+            let task = Arc::new(task);
+            self.tasks.insert(id, task.clone());
         }
 
         Ok(())

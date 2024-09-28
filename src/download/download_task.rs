@@ -127,10 +127,10 @@ impl DownloadTask {
         }
     }
 
-    pub async fn resume(&mut self, semaphore: Arc<Semaphore>) {
+    pub async fn resume(&mut self) {
         let state = self.state.clone();
         let client = self.client.clone();
-        let semaphore = semaphore.clone();
+        let semaphore = self.semaphore.clone();
 
         // 这个任务没有正在进行的任务, 或者这个任务已经完成
         if self.handle.is_none() || self.handle.as_ref().unwrap().is_finished() {
