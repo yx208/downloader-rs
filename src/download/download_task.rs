@@ -17,6 +17,7 @@ use tokio::fs::{OpenOptions, File};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{Semaphore, Mutex};
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct DownloadTaskState {
@@ -29,7 +30,7 @@ pub struct DownloadTaskState {
     pub retry_times: usize
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum TaskStatus {
     Pending,
     Downloading,
@@ -39,23 +40,33 @@ pub enum TaskStatus {
 }
 
 pub struct DownloadTask {
+    pub id: Uuid,
     // 多线程共享, 每次更改状态应先 lock, 只读使用 clone
     pub state: Arc<Mutex<DownloadTaskState>>,
     // Client 内部拥有一个连接池且默认拥有一个 Arc 包裹，所以应尽量使用 clone 复用
     pub client: Client,
-    pub handle: Option<JoinHandle<()>>
+    // tokio::spawn JoinHandle
+    pub handle: Option<JoinHandle<()>>,
+    // 信号量
+    pub semaphore: Arc<Semaphore>,
 }
 
 impl DownloadTask {
-    pub async fn new(url: String, file_path: String, chunk_size: u64, retry_times: usize) -> Result<Self> {
+    pub async fn new(
+        url: String,
+        file_path: String,
+        chunk_size: u64,
+        retry_times: usize,
+        semaphore: Arc<Semaphore>,
+    ) -> Result<Self> {
         let client = Client::new();
         let file_size = get_content_length(&client, &url)
             .await
             .with_context(|| format!("Get file size failed: {}", &url))?;
 
         if !Path::new(&file_path).exists() {
-            let file = fs::File::create(&file_path)?;
-            file.set_len(file_size)?;
+            let file = File::create(&file_path).await?;
+            file.set_len(file_size).await?;
         }
 
         let state = DownloadTaskState {
@@ -70,38 +81,38 @@ impl DownloadTask {
 
         Ok(DownloadTask {
             client,
+            semaphore,
+            handle: None,
+            id: Uuid::new_v4(),
             state: Arc::new(Mutex::new(state)),
-            handle: None
         })
     }
 
-    pub async fn start(&mut self, semaphore: Arc<Semaphore>) {
+    pub async fn start(&mut self) {
         let state = self.state.clone();
         let client = self.client.clone();
+        let semaphore = self.semaphore.clone();
 
         // 'acquire_owned' 才能跨线程, 申请线程许可，如果线程使用满了则等待
         let permit = semaphore.acquire_owned().await.unwrap();
-
         // 确保在锁外创建异步任务
+        let handle_state = state.clone();
         self.handle = Some(tokio::spawn(async move {
-            {
-                let mut state_guard = state.lock().await;
-                if state_guard.status == TaskStatus::Completed {
-                    info!("Task completed: {}", state_guard.file_path);
-                    return;
-                }
-                state_guard.status = TaskStatus::Downloading;
-            }
+            let result = download_task(handle_state.clone(), client).await;
+            let mut state_guard = handle_state.lock().await;
 
-            // 根据下载情况，把任务置为不同状态
-            if let Err(e) = download_task(state.clone(), client).await {
-                error!("Download failed: {}", e);
-                let mut state_guard = state.lock().await;
-                state_guard.status = TaskStatus::Failed;
-            } else {
-                let mut state_guard = state.lock().await;
-                state_guard.status = TaskStatus::Completed;
-                info!("Download completed: {}", state_guard.file_path);
+            // 只有三种结果：Paused, Completed, Err
+            match result {
+                Ok(TaskStatus::Completed) => {
+                    state_guard.status = TaskStatus::Completed;
+                },
+                Ok(TaskStatus::Paused) => {
+                    // 状态已在暂停时设置，这里无需修改
+                },
+                Err(e) => {
+                    state_guard.status = TaskStatus::Failed;
+                },
+                _ => ()
             }
 
             drop(permit);
@@ -119,28 +130,28 @@ impl DownloadTask {
     pub async fn resume(&mut self, semaphore: Arc<Semaphore>) {
         let state = self.state.clone();
         let client = self.client.clone();
+        let semaphore = semaphore.clone();
 
         // 这个任务没有正在进行的任务, 或者这个任务已经完成
         if self.handle.is_none() || self.handle.as_ref().unwrap().is_finished() {
+            let permit = semaphore.acquire_owned().await.unwrap();
+            let handle_state = state.clone();
+
             self.handle = Some(tokio::spawn(async move {
-                let permit = semaphore.acquire_owned().await.unwrap();
+                let result = download_task(handle_state.clone(), client).await;
+                let mut state_guard = handle_state.lock().await;
 
-                {
-                    let mut state_guard = state.lock().await;
-                    if state_guard.status != TaskStatus::Failed && state_guard.status != TaskStatus::Paused {
-                        return;
+                match result {
+                    Ok(TaskStatus::Completed) => {
+                        state_guard.status = TaskStatus::Completed;
                     }
-                    state_guard.status = TaskStatus::Downloading;
-                }
-
-                if let Err(err) = download_task(state.clone(), client).await {
-                    error!("Download failed: {}", err);
-                    let mut state_guard = state.lock().await;
-                    state_guard.status = TaskStatus::Failed;
-                } else {
-                    let mut state_guard = state.lock().await;
-                    state_guard.status = TaskStatus::Completed;
-                    info!("Download completed: {}", state_guard.file_path);
+                    Ok(TaskStatus::Paused) => {
+                        // 状态已在暂停时设置，这里无需修改
+                    }
+                    Err(e) => {
+                        state_guard.status = TaskStatus::Failed;
+                    },
+                    _ => ()
                 }
 
                 drop(permit);
@@ -164,15 +175,21 @@ impl DownloadTask {
 }
 
 /// 下载任务
-///
-async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> Result<()> {
-    let state_guard = state.lock().await;
-    let url = state_guard.url.clone();
-    let file_path = state_guard.file_path.clone();
-    let file_size = state_guard.file_size;
-    let chunk_size = state_guard.chunk_size;
-    let retry_times = state_guard.retry_times;
-    drop(state_guard);
+async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> Result<TaskStatus> {
+    let url;
+    let file_path;
+    let file_size;
+    let chunk_size;
+    let retry_times;
+
+    {
+        let state_guard = state.lock().await;
+        url = state_guard.url.clone();
+        file_path = state_guard.file_path.clone();
+        file_size = state_guard.file_size;
+        chunk_size = state_guard.chunk_size;
+        retry_times = state_guard.retry_times;
+    }
 
     let mut file = OpenOptions::new()
         .write(true)
@@ -181,25 +198,35 @@ async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> 
         .with_context(|| format!("File chunk write failed: {}", &file_path))?;
 
     loop {
-        let start;
-
-        {
+        let start = {
             let state_guard = state.lock().await;
-            if state_guard.status == TaskStatus::Paused || state_guard.status == TaskStatus::Failed {
-                info!("The download task has been paused or stop: {}", state_guard.file_path);
-                break;
+            if state_guard.status == TaskStatus::Paused {
+                info!("Download has been paused: {}", &file_path);
+                return Ok(TaskStatus::Paused);
             }
-
+            if state_guard.status == TaskStatus::Failed {
+                error!("Download failed: {}", &file_path);
+                return Err(anyhow::anyhow!("Download task failed"));
+            }
             if state_guard.downloaded >= file_size {
-                break;
+                info!("Download has been completed: {}", &file_path);
+                return Ok(TaskStatus::Completed);
             }
 
-            start = state_guard.downloaded;
-        }
+            state_guard.downloaded
+        };
 
         let end = ((start + chunk_size).min(file_size)) - 1;
 
-        let result = download_chunk_with_retry(&client, &url, start, end, &mut file, retry_times).await;
+        let result = download_chunk_with_retry(
+            &client,
+            &url,
+            start,
+            end,
+            &mut file,
+            retry_times,
+            state.clone()
+        ).await;
         match result {
             Ok(bytes_downloaded) => {
                 let mut state_guard = state.lock().await;
@@ -207,14 +234,12 @@ async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> 
             },
             Err(e) => {
                 error!("Download chunk failed: {}", e);
-                let mut state_guard = state.lock().await;
-                state_guard.status = TaskStatus::Failed;
+                // let mut state_guard = state.lock().await;
+                // state_guard.status = TaskStatus::Failed;
                 return Err(e);
             }
         }
     }
-
-    Ok(())
 }
 
 /// 为下载的 chunk 添加重试
@@ -224,11 +249,12 @@ async fn download_chunk_with_retry(
     start: u64,
     end: u64,
     file: &mut File,
-    retry_times: usize
+    retry_times: usize,
+    state: Arc<Mutex<DownloadTaskState>>,
 ) -> Result<u64> {
     let mut attempts = 0;
     loop {
-        match download_chunk(client, url, start, end, file).await {
+        match download_chunk(client, url, start, end, file, state.clone()).await {
             Ok(bytes_downloaded) => return Ok(bytes_downloaded),
             Err(error) => {
                 attempts += 1;
@@ -244,7 +270,14 @@ async fn download_chunk_with_retry(
 }
 
 /// 下载单个 chunk
-async fn download_chunk(client: &Client, url: &str, start: u64, end: u64, file: &mut File) -> Result<u64> {
+async fn download_chunk(
+    client: &Client,
+    url: &str,
+    start: u64,
+    end: u64,
+    file: &mut File,
+    state: Arc<Mutex<DownloadTaskState>>
+) -> Result<u64> {
     let range_header = format!("bytes={}-{}", start, end);
     let resp = client
         .get(url)
@@ -263,6 +296,12 @@ async fn download_chunk(client: &Client, url: &str, start: u64, end: u64, file: 
             let chunk = item?;
             file.write_all(&chunk).await?;
             total_bytes += chunk.len() as u64;
+
+            let state_guard = state.lock().await;
+            if state_guard.status == TaskStatus::Paused {
+                info!("Download has been paused: {}", state_guard.file_path);
+                return Ok(total_bytes);
+            }
         }
 
         Ok(total_bytes)
@@ -299,8 +338,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_download_task() -> Result<()> {
-        let url = "https://example.zip";
-        let file_path = "/home/save-dir/example.zip";
+        let url = "https://oss.xgy.tv/xgy/design/test/cool.mp4";
+        let file_path = "C:/Users/User/Downloads/demo.mp4";
         let chunk_size = 1024 * 1024 * 5;
         let retry_times = 3;
 
@@ -309,16 +348,17 @@ mod tests {
             fs::remove_file(file_path).await?;
         }
 
+        let semaphore = Arc::new(Semaphore::new(1));
         let mut task = DownloadTask::new(
             url.to_string(),
             file_path.to_string(),
             chunk_size,
             retry_times,
+            semaphore
         )
             .await?;
 
-        let semaphore = Arc::new(Semaphore::new(1));
-        task.start(semaphore.clone()).await;
+        task.start().await;
 
         // 等待任务完成
         while !task.is_finished() {

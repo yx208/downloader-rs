@@ -3,9 +3,9 @@
 //!
 
 use fern::colors::{Color, ColoredLevelConfig};
-use anyhow::Result;
+use log::LevelFilter;
 
-pub fn setup_logger() -> Result<()> {
+pub fn setup_logger() -> anyhow::Result<()> {
     let colors_line = ColoredLevelConfig::new()
         .error(Color::Red)
         .warn(Color::Yellow)
@@ -23,9 +23,9 @@ pub fn setup_logger() -> Result<()> {
                 message
             ))
         })
-        .level(log::LevelFilter::Info)
+        .level(LevelFilter::Info)
         .chain(std::io::stdout())
         .apply()?;
-
+    
     Ok(())
 }

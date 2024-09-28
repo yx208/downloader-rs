@@ -10,13 +10,13 @@ use std::path::Path;
 use anyhow::Result;
 use log::{info, error};
 use tokio::sync::{Mutex, Semaphore};
-
+use uuid::Uuid;
 use crate::download::download_task::{DownloadTask, DownloadTaskState, TaskStatus};
 use crate::download::persistence::PersistenceState;
 
 // 简化类型定义抽出来的
 // DownloadTask 需要在多线程共享修改，需要包裹 Arc/Mutex
-type DownloaderTaskMap = HashMap<String, Arc<Mutex<DownloadTask>>>;
+type DownloaderTaskMap = HashMap<Uuid, Arc<Mutex<DownloadTask>>>;
 
 pub struct Downloader {
     // 跨线程读写包裹
@@ -38,12 +38,13 @@ impl Downloader {
 
     /// 添加新下载任务
     pub async fn add_task(&self, url: String, file_path: String, chunk_size: u64, retry_times: usize) -> Result<()> {
-        let mut task = DownloadTask::new(url.clone(), file_path, chunk_size, retry_times).await?;
-        task.start(self.semaphore.clone()).await;
+        let mut task = DownloadTask::new(url.clone(), file_path, chunk_size, retry_times, self.semaphore.clone()).await?;
+        let id = task.id.clone();
+        task.start().await;
 
         let task = Arc::new(Mutex::new(task));
 
-        self.tasks.lock().await.insert(url.clone(), task.clone());
+        self.tasks.lock().await.insert(id, task.clone());
 
         self.save_state().await?;
 
@@ -51,24 +52,24 @@ impl Downloader {
     }
 
     /// 暂停任务
-    pub async fn pause_task(&self, url: &str) {
-        if let Some(task) = self.tasks.lock().await.get(url) {
+    pub async fn pause_task(&self, id: &Uuid) {
+        if let Some(task) = self.tasks.lock().await.get(id) {
             task.lock().await.pause().await;
             self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
         }
     }
 
     /// 恢复任务
-    pub async fn resume_task(&self, url: &str) {
-        if let Some(task) = self.tasks.lock().await.get(url) {
+    pub async fn resume_task(&self, id: &Uuid) {
+        if let Some(task) = self.tasks.lock().await.get(id) {
             task.lock().await.resume(self.semaphore.clone()).await;
             self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
         }
     }
 
     /// 删除任务
-    pub async fn delete_task(&self, url: &str) {
-        if let Some(task) = self.tasks.lock().await.remove(url) {
+    pub async fn delete_task(&self, id: &Uuid) {
+        if let Some(task) = self.tasks.lock().await.remove(id) {
             let task_guard = task.lock().await;
             let task_state = task_guard.state.lock().await;
             if Path::new(&task_state.file_path).exists() {
@@ -77,7 +78,7 @@ impl Downloader {
                     .unwrap_or_else(|e| error!("Failed to delete file: {}", e));
             }
             self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
-            info!("The task has been deleted: {}", url);
+            info!("The task has been deleted: {}", id.to_string());
         }
     }
 
@@ -115,17 +116,20 @@ impl Downloader {
         for task_state in persistent_state.tasks {
             // 创建任务实例
             let mut task = DownloadTask {
+                id: Uuid::new_v4(),
+                semaphore: self.semaphore.clone(),
                 state: Arc::new(Mutex::new(task_state.clone())),
                 client: reqwest::Client::new(),
                 handle: None
             };
+            let id = task.id.clone();
 
             if task_state.status == TaskStatus::Downloading || task_state.status == TaskStatus::Pending {
-                task.start(self.semaphore.clone()).await;
+                task.start().await;
             }
 
             let task = Arc::new(Mutex::new(task));
-            self.tasks.lock().await.insert(task_state.url.clone(), task.clone());
+            self.tasks.lock().await.insert(id, task.clone());
         }
 
         Ok(())
