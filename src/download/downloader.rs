@@ -4,7 +4,6 @@
 //!
 
 use std::sync::Arc;
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -34,46 +33,60 @@ impl Downloader {
     }
 
     /// 添加新下载任务
-    pub async fn add_task(&self, url: String, file_path: String, chunk_size: u64, retry_times: usize) -> Result<()> {
+    pub async fn add_task(&self, url: String, file_path: String, chunk_size: u64, retry_times: usize) -> Result<Uuid> {
         let mut task = DownloadTask::new(url.clone(), file_path, chunk_size, retry_times, self.semaphore.clone()).await?;
-        let id = task.id.clone();
+        let task_id;
+        {
+            let state_guard = task.state.lock().await;
+            task_id = state_guard.id.clone();
+        }
         task.start().await;
 
         let task = Arc::new(Mutex::new(task));
-        self.tasks.insert(id, task);
+        self.tasks.insert(task_id, task);
         self.save_state().await?;
 
-        Ok(())
+        Ok(task_id.clone())
     }
 
     /// 暂停任务
-    pub async fn pause_task(&self, id: &Uuid) {
-        if let Some(task) = self.tasks.get(id) {
+    pub async fn pause_task(&self, id: Uuid) {
+        if let Some(task) = self.tasks.get(&id) {
             task.value().lock().await.pause().await;
         }
         self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
     }
 
     /// 恢复任务
-    pub async fn resume_task(&self, id: &Uuid) {
-        if let Some(task) = self.tasks.get(id) {
+    pub async fn resume_task(&self, id: Uuid) {
+        if let Some(task) = self.tasks.get(&id) {
             let mut task = task.value().lock().await;
             task.resume().await;
         }
         self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
     }
 
+    pub async fn cancel_task(&self, id: Uuid) {
+        if let Some(task) = self.tasks.get(&id) {
+            task.value().lock().await.cancel().await;
+        }
+        self.save_state()
+            .await
+            .unwrap_or_else(|e| error!("Failed to save state: {}", e));
+    }
+
     /// 删除任务
     pub async fn delete_task(&self, id: &Uuid) {
         if let Some((_, task)) = self.tasks.remove(id) {
             let task_guard = task.lock().await;
+            task_guard.cancel().await;
             let state_guard = task_guard.state.lock().await;
             if Path::new(&state_guard.file_path).exists() {
                 tokio::fs::remove_file(&state_guard.file_path)
                     .await
                     .unwrap_or_else(|e| error!("Failed to delete file: {}", e));
             }
-            info!("The task has been deleted: {}", id.to_string());
+            info!("Task deleted: {}", state_guard.file_path);
         }
         self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
     }
@@ -104,9 +117,7 @@ impl Downloader {
         let persistent_state = PersistenceState::load_from_file(&self.state_file)?;
         for task_state in persistent_state.tasks {
             // 创建任务实例
-            let id = Uuid::new_v4();
             let mut task = DownloadTask {
-                id: id.clone(),
                 semaphore: self.semaphore.clone(),
                 state: Arc::new(Mutex::new(task_state.clone())),
                 client: reqwest::Client::new(),
@@ -117,10 +128,28 @@ impl Downloader {
                 task.start().await;
             }
 
+            let task_id = task.state.lock().await.id.clone();
             let task = Arc::new(Mutex::new(task));
-            self.tasks.insert(id, task);
+            self.tasks.insert(task_id, task);
         }
 
         Ok(())
+    }
+
+    pub async fn remove_completed_tasks(&self) {
+        let mut tasks_to_remove = Vec::new();
+
+        for entry in self.tasks.iter() {
+            let task_id = *entry.key();
+            let task = entry.value();
+            let state = task.lock().await.state.lock().await.clone();
+            if state.status == TaskStatus::Completed {
+                tasks_to_remove.push(task_id);
+            }
+        }
+
+        for task_id in tasks_to_remove {
+            self.tasks.remove(&task_id);
+        }
     }
 }

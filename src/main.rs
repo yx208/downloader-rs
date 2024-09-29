@@ -11,8 +11,7 @@ use tokio::signal;
 use download::logger;
 use download::config::Config;
 use download::downloader::Downloader;
-use download::download_task::{DownloadTask, TaskStatus};
-use cli::CliArgs;
+use download::download_task::{TaskStatus};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -28,11 +27,10 @@ async fn main() -> Result<()> {
     tokio::fs::create_dir_all(&config.download_dir).await?;
 
     // 初始化下载器
-    let mut state_file = dirs::download_dir().unwrap();
-    state_file.push("download_state.json");
+    let state_file = "download_state.json";
     let downloader = Arc::new(Downloader::new(
         config.max_concurrent_downloads,
-        state_file.to_str().unwrap().to_string()
+        state_file.to_string(),
     ));
 
     // 加载之前的状态
@@ -48,27 +46,18 @@ async fn main() -> Result<()> {
                 .to_string()
         });
         let file_path = format!("{}/{}", config.download_dir, file_name);
-
-        downloader
-            .add_task(
-                url.clone(),
-                file_path,
-                config.chunk_size,
-                config.retry_times,
-            )
-            .await
-            .unwrap_or_else(|e| error!("添加任务失败：{}", e));
+        downloader.add_task(url.clone(), file_path, config.chunk_size, config.retry_times).await?;
     }
 
     // 监听 Ctrl+C 信号，用于优雅退出
     let downloader_clone = downloader.clone();
     tokio::spawn(async move {
-        signal::ctrl_c().await.expect("无法监听 Ctrl+C 信号");
-        info!("接收到中断信号，正在保存状态...");
+        signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+        info!("Received interrupt signal, saving state...");
         downloader_clone
             .save_state()
             .await
-            .unwrap_or_else(|e| error!("保存状态失败：{}", e));
+            .unwrap_or_else(|e| error!("Failed to save state: {}", e));
         std::process::exit(0);
     });
 
@@ -76,13 +65,14 @@ async fn main() -> Result<()> {
     loop {
         let tasks = downloader.get_tasks().await;
         if tasks.is_empty() {
-            info!("没有任务在运行");
+            info!("No tasks running");
             break;
         }
 
         for task in &tasks {
             info!(
-                "任务：{} - 状态：{:?} - 进度：{:.2}%",
+                "Task [{}]: {} - Status: {:?} - Progress: {:.2}%",
+                task.id,
                 task.file_path,
                 task.status,
                 task.downloaded as f64 / task.file_size as f64 * 100.0
@@ -92,15 +82,18 @@ async fn main() -> Result<()> {
         downloader
             .save_state()
             .await
-            .unwrap_or_else(|e| error!("保存状态失败：{}", e));
+            .unwrap_or_else(|e| error!("Failed to save state: {}", e));
+
+        // 移除已完成的任务
+        downloader.remove_completed_tasks().await;
 
         // 检查是否所有任务都已完成
-        if tasks.iter().all(|t| t.status == TaskStatus::Completed || t.status == TaskStatus::Failed) {
-            info!("所有任务已完成");
+        if tasks.iter().all(|t| t.status == TaskStatus::Completed || t.status == TaskStatus::Failed || t.status == TaskStatus::Canceled) {
+            info!("All tasks completed");
             break;
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
 
     // 最后保存状态
