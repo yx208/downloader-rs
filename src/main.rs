@@ -20,16 +20,19 @@ async fn main() -> Result<()> {
     logger::setup_logger()?;
 
     // 加载配置
-    let config = Config::default();
+    let mut download_dir = dirs::download_dir().unwrap();
+    download_dir.push("config.json");
+    let config = Config::load_from_file(download_dir.to_str().unwrap())?;
 
     // 创建下载目录（如果不存在）
     tokio::fs::create_dir_all(&config.download_dir).await?;
 
     // 初始化下载器
-    let state_file = "download_state.json";
+    let mut state_file = dirs::download_dir().unwrap();
+    state_file.push("download_state.json");
     let downloader = Arc::new(Downloader::new(
         config.max_concurrent_downloads,
-        state_file.to_string(),
+        state_file.to_str().unwrap().to_string()
     ));
 
     // 加载之前的状态
