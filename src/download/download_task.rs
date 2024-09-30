@@ -133,10 +133,11 @@ impl DownloadTask {
         {
             let state = self.state.clone();
             let mut state_guard = state.lock().await;
-            // 非暂停或者失败状态，不能恢复下载
-            if state_guard.status != TaskStatus::Paused || state_guard.status != TaskStatus::Failed {
+
+            if state_guard.status != TaskStatus::Paused && state_guard.status != TaskStatus::Failed {
                 return;
             }
+
             state_guard.status = TaskStatus::Downloading;
         }
 
@@ -184,7 +185,6 @@ async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> 
     loop {
         let start = {
             let state_guard = state.lock().await;
-
             match state_guard.status {
                 TaskStatus::Paused => {
                     info!("Download has been paused: {}", &file_path);
