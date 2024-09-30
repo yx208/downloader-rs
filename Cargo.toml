@@ -20,3 +20,4 @@ chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 uuid = { version = "1.10.0", features = ["fast-rng", "v4", "serde"] }
 dashmap = "6.1.0"
+async-channel = "2.3.1"

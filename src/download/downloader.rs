@@ -11,7 +11,10 @@ use dashmap::DashMap;
 use log::{info, error};
 use tokio::sync::{Mutex, Semaphore};
 use uuid::Uuid;
+use async_channel::{Sender, Receiver};
+
 use crate::download::download_task::{DownloadTask, DownloadTaskState, TaskStatus};
+use crate::download::download_task::TaskStatus::Pending;
 use crate::download::persistence::PersistenceState;
 
 pub struct Downloader {
@@ -20,33 +23,97 @@ pub struct Downloader {
     // 线程限制
     semaphore: Arc<Semaphore>,
     // 状态文件路径
-    state_file: String
+    state_file: String,
+    pending_sender: Sender<Uuid>,
+    pending_receiver: Receiver<Uuid>,
 }
 
 impl Downloader {
-    pub fn new(max_concurrent_downloads: usize, state_file: String) -> Self {
-        Downloader {
+    pub fn new(max_concurrent_downloads: usize, state_file: String) -> Arc<Self> {
+        let (pending_sender, pending_receiver) = async_channel::unbounded();
+        let downloader = Arc::new(Downloader {
             state_file,
             tasks: Arc::new(DashMap::new()),
-            semaphore: Arc::new(Semaphore::new(max_concurrent_downloads))
-        }
+            semaphore: Arc::new(Semaphore::new(max_concurrent_downloads)),
+            pending_sender,
+            pending_receiver
+        });
+
+        downloader.clone().start_scheduler();
+        downloader
     }
 
     /// 添加新下载任务
-    pub async fn add_task(&self, url: String, file_path: String, chunk_size: u64, retry_times: usize) -> Result<Uuid> {
-        let mut task = DownloadTask::new(url.clone(), file_path, chunk_size, retry_times, self.semaphore.clone()).await?;
-        let task_id;
-        {
-            let state_guard = task.state.lock().await;
-            task_id = state_guard.id.clone();
-        }
-        task.start().await;
+    pub async fn add_task(&self, url: String, mut file_path: String, chunk_size: u64, retry_times: usize) -> Result<Uuid> {
+        file_path = self.handle_existing_file(&file_path).await;
 
+        let mut task = DownloadTask::new(url.clone(), file_path, chunk_size, retry_times, self.semaphore.clone());
+        let task_id = task.state.lock().await.id.clone();
         let task = Arc::new(Mutex::new(task));
-        self.tasks.insert(task_id, task);
+
+        self.tasks.insert(task_id.clone(), task);
+        self.pending_sender.send(task_id.clone()).await?;
         self.save_state().await?;
 
-        Ok(task_id.clone())
+        Ok(task_id)
+    }
+
+    /// 处理文件夹中文件重名问题
+    async fn handle_existing_file(&self, file_path: &str) -> String {
+        let mut new_file_path = file_path.to_string();
+        let mut counter = 1;
+        while Path::new(&new_file_path).exists() {
+            let extension = Path::new(file_path)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let file_stem = Path::new(file_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+
+            if extension.is_empty() {
+                new_file_path = format!("{}_{}", file_stem, counter);
+            } else {
+                new_file_path = format!("{}_{}.{}", file_stem, counter, extension);
+            }
+
+            counter += 1;
+        }
+
+        new_file_path
+    }
+
+    fn start_scheduler(self: Arc<Self>) {
+        let downloader = self.clone();
+        tokio::spawn(async move {
+            loop {
+                let task_id = match downloader.pending_receiver.recv().await {
+                    Ok(task_id) => task_id,
+                    Err(_) => break
+                };
+
+                let permit = downloader.semaphore.clone().acquire_owned().await.unwrap();
+
+                let task = {
+                    if let Some(task) = downloader.tasks.get(&task_id) {
+                        task.clone()
+                    } else {
+                        drop(permit);
+                        continue;
+                    }
+                };
+
+                {
+                    let mut task_guard = task.lock().await;
+                    let mut state_guard = task_guard.state.lock().await;
+                    state_guard.status = TaskStatus::Downloading;
+                }
+
+                let downloader_clone = downloader.clone();
+                let task_clone = task.clone();
+            }
+        });
     }
 
     /// 暂停任务
