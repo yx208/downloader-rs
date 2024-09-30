@@ -89,24 +89,17 @@ impl DownloadTask {
     }
 
     pub async fn start(&mut self) {
-        let state = self.state.clone();
-        let client = self.client.clone();
-        let semaphore = self.semaphore.clone();
+        {
+            let state = self.state.clone();
+            let mut state_guard = state.lock().await;
+            // 非暂停或者失败状态，不能恢复下载
+            if state_guard.status != TaskStatus::Pending {
+                return;
+            }
+            state_guard.status = TaskStatus::Downloading;
+        }
 
-        let permit = semaphore.acquire_owned().await.unwrap();
-        let handle_state = state.clone();
-
-        self.handle = Some(tokio::spawn(async move {
-            let result = download_task(handle_state.clone(), client).await;
-            let mut state_guard = handle_state.lock().await;
-
-            match result {
-                Ok(task_state) => state_guard.status = task_state,
-                Err(_) => state_guard.status = TaskStatus::Failed
-            };
-
-            drop(permit);
-        }));
+        self.run_task().await;
     }
 
     pub async fn pause(&self) {
@@ -117,22 +110,11 @@ impl DownloadTask {
         }
     }
 
-    pub async fn resume(&mut self) {
-        let state = self.state.clone();
+    async fn run_task(&mut self) {
+        let handle_state = self.state.clone();
         let client = self.client.clone();
         let semaphore = self.semaphore.clone();
-
-        {
-            let mut state_guard = state.lock().await;
-            // 非暂停或者失败状态，不能恢复下载
-            if state_guard.status != TaskStatus::Paused || state_guard.status != TaskStatus::Failed {
-                return;
-            }
-            state_guard.status = TaskStatus::Downloading;
-        }
-
         let permit = semaphore.acquire_owned().await.unwrap();
-        let handle_state = state.clone();
 
         self.handle = Some(tokio::spawn(async move {
             let result = download_task(handle_state.clone(), client).await;
@@ -145,6 +127,20 @@ impl DownloadTask {
 
             drop(permit);
         }));
+    }
+
+    pub async fn resume(&mut self) {
+        {
+            let state = self.state.clone();
+            let mut state_guard = state.lock().await;
+            // 非暂停或者失败状态，不能恢复下载
+            if state_guard.status != TaskStatus::Paused || state_guard.status != TaskStatus::Failed {
+                return;
+            }
+            state_guard.status = TaskStatus::Downloading;
+        }
+
+        self.run_task().await;
     }
 
     pub async fn cancel(&self) {
@@ -337,8 +333,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_download_task() -> Result<()> {
+        let mut download_dir = dirs::download_dir().unwrap();
+        download_dir.push("demo.mp4");
+
         let url = "https://oss.xgy.tv/xgy/design/test/cool.mp4";
-        let file_path = "C:/Users/User/Downloads/demo.mp4";
+        let file_path = download_dir.to_str().unwrap();
         let chunk_size = 1024 * 1024 * 5;
         let retry_times = 3;
 
