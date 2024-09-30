@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use dashmap::DashMap;
 use log::{info, error};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{RwLock, Semaphore};
 use uuid::Uuid;
 use async_channel::{Sender, Receiver};
 
@@ -18,36 +18,31 @@ use crate::download::download_task::TaskStatus::Pending;
 use crate::download::persistence::PersistenceState;
 
 pub struct Downloader {
-    // 跨线程读写包裹
-    tasks: Arc<DashMap<Uuid, Arc<Mutex<DownloadTask>>>>,
-    // 线程限制
-    semaphore: Arc<Semaphore>,
-    // 状态文件路径
     state_file: String,
+    tasks: Arc<DashMap<Uuid, Arc<RwLock<DownloadTask>>>>,
+    semaphore: Arc<Semaphore>,
     pending_sender: Sender<Uuid>,
     pending_receiver: Receiver<Uuid>,
 }
 
 impl Downloader {
-    pub fn new_default() -> Arc<Downloader> {
+    pub fn new_default() -> Arc<Self> {
         let mut download_dir = dirs::download_dir().unwrap();
         download_dir.push("state.log");
-
-        Self::new(3usize, String::from(download_dir.to_str().unwrap()))
+        let state_file = download_dir.to_str().unwrap();
+        Self::new(3usize, state_file)
     }
 
-    pub fn new(max_concurrent_downloads: usize, state_file: String) -> Arc<Self> {
+    pub fn new(max_concurrent_downloads: usize, state_file: &str) -> Arc<Self> {
         let (pending_sender, pending_receiver) = async_channel::unbounded();
         let downloader = Arc::new(Downloader {
+            state_file: state_file.to_string(),
             tasks: Arc::new(DashMap::new()),
             semaphore: Arc::new(Semaphore::new(max_concurrent_downloads)),
-            state_file,
             pending_sender,
-            pending_receiver
+            pending_receiver,
         });
-
         downloader.clone().start_scheduler();
-
         downloader
     }
 
@@ -58,18 +53,24 @@ impl Downloader {
         mut file_path: String,
         chunk_size: u64,
         retry_times: usize
-    ) -> Result<()> {
+    ) -> Result<Uuid> {
+        // Handle existing file names
         file_path = self.handle_existing_file(&file_path).await;
 
-        let mut task = DownloadTask::new(url.clone(), file_path, chunk_size, retry_times, self.semaphore.clone());
-        let task_id = task.state.lock().await.id.clone();
-        let task = Arc::new(Mutex::new(task));
+        let mut task = DownloadTask::new(
+            url.clone(),
+            file_path,
+            chunk_size,
+            retry_times,
+            self.semaphore.clone()
+        );
+        let task_id = task.state.read().await.id;
+        let task = Arc::new(RwLock::new(task));
 
-        self.tasks.insert(task_id.clone(), task.clone());
+        self.tasks.insert(task_id, task.clone());
         self.pending_sender.send(task_id).await?;
-        self.save_state().await?;
 
-        Ok(())
+        Ok(task_id)
     }
 
     /// 处理文件夹中文件重名问题
@@ -101,17 +102,22 @@ impl Downloader {
         path.to_str().unwrap().to_string()
     }
 
+    /// 开始调度
     fn start_scheduler(self: Arc<Self>) {
         let downloader = self.clone();
         // 建立一个线程，循环处理任务调度
         tokio::spawn(async move {
             loop {
+                // Wait for a task to become available
                 let task_id = match downloader.pending_receiver.recv().await {
                     Ok(task_id) => task_id,
-                    Err(_) => break
+                    Err(_) => break, // Channel closed
                 };
 
+                // Try to acquire a semaphore permit
                 let permit = downloader.semaphore.clone().acquire_owned().await.unwrap();
+
+                // Start the task
                 let task = {
                     if let Some(task) = downloader.tasks.get(&task_id) {
                         task.clone()
@@ -121,9 +127,10 @@ impl Downloader {
                     }
                 };
 
+                // Set the task status to Downloading
                 {
-                    let mut task_guard = task.lock().await;
-                    let mut state_guard = task_guard.state.lock().await;
+                    let mut task_guard = task.write().await;
+                    let mut state_guard = task_guard.state.write().await;
                     state_guard.status = TaskStatus::Downloading;
                 }
 
@@ -132,11 +139,11 @@ impl Downloader {
 
                 // Execute download
                 tokio::spawn(async move {
-                    let client = task_clone.lock().await.client.clone();
-                    let result = download_task(task_clone.lock().await.state.clone(), client).await;
+                    let client = task_clone.read().await.client.clone();
+                    let result = download_task(task_clone.read().await.state.clone(), client).await;
 
-                    let task_guard = task_clone.lock().await;
-                    let mut state_guard = task_guard.state.lock().await;
+                    let task_guard = task_clone.read().await;
+                    let mut state_guard = task_guard.state.write().await;
 
                     match result {
                         Ok(TaskStatus::Completed) => {
@@ -146,6 +153,7 @@ impl Downloader {
                         Ok(TaskStatus::Paused) => {
                             state_guard.status = TaskStatus::Paused;
                             info!("Task paused: {}", state_guard.file_path);
+                            // Re-add to pending queue
                             downloader_clone.pending_sender.send(task_id).await.unwrap();
                         }
                         Ok(TaskStatus::Canceled) => {
@@ -156,9 +164,10 @@ impl Downloader {
                             state_guard.status = TaskStatus::Failed;
                             error!("Download failed: {}", e);
                         }
-                        _ => ()
+                        _ => {}
                     }
 
+                    // Release the permit
                     drop(permit);
                 });
             }
@@ -168,23 +177,30 @@ impl Downloader {
     /// 暂停任务
     pub async fn pause_task(&self, id: Uuid) {
         if let Some(task) = self.tasks.get(&id) {
-            task.value().lock().await.pause().await;
+            task.value().read().await.pause().await;
         }
-        self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
+        self.save_state()
+            .await
+            .unwrap_or_else(|e| error!("Failed to save state: {}", e));
     }
 
     /// 恢复任务
     pub async fn resume_task(&self, id: Uuid) {
         if let Some(task) = self.tasks.get(&id) {
-            let mut task = task.value().lock().await;
-            task.resume().await;
+            let mut task_guard = task.value().write().await;
+            task_guard.resume().await;
+            // Re-add to pending queue
+            self.pending_sender.send(id).await.unwrap();
         }
-        self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
+        self.save_state()
+            .await
+            .unwrap_or_else(|e| error!("Failed to save state: {}", e));
     }
 
+    /// 取消任务
     pub async fn cancel_task(&self, id: Uuid) {
         if let Some(task) = self.tasks.get(&id) {
-            task.value().lock().await.cancel().await;
+            task.value().read().await.cancel().await;
         }
         self.save_state()
             .await
@@ -194,15 +210,16 @@ impl Downloader {
     /// 删除任务
     pub async fn delete_task(&self, id: Uuid) {
         if let Some((_, task)) = self.tasks.remove(&id) {
-            let task_guard = task.lock().await;
-            task_guard.cancel().await;
-            let state_guard = task_guard.state.lock().await;
-            if Path::new(&state_guard.file_path).exists() {
-                tokio::fs::remove_file(&state_guard.file_path)
+            // Ensure the download is stopped
+            task.read().await.cancel().await;
+
+            let state = task.read().await.state.read().await.clone();
+            if Path::new(&state.file_path).exists() {
+                tokio::fs::remove_file(&state.file_path)
                     .await
                     .unwrap_or_else(|e| error!("Failed to delete file: {}", e));
             }
-            info!("Task deleted: {}", state_guard.file_path);
+            info!("Task deleted: {}", state.file_path);
         }
         self.save_state().await.unwrap_or_else(|e| error!("Failed to save state: {}", e));
     }
@@ -211,12 +228,9 @@ impl Downloader {
     pub async fn get_tasks(&self) -> Vec<DownloadTaskState> {
         let mut task_states= Vec::new();
         for entry in self.tasks.iter() {
-            println!("1");
-            let task_guard = entry.value().lock().await;
-            println!("2");
-            let state_guard = task_guard.state.lock().await.clone();
-            println!("3");
-            task_states.push(state_guard);
+            let task_guard = entry.value().read().await;
+            let state_guard = task_guard.state.read().await;
+            task_states.push(state_guard.clone());
         }
 
         task_states
@@ -238,7 +252,7 @@ impl Downloader {
             // 创建任务实例
             let mut task = DownloadTask {
                 semaphore: self.semaphore.clone(),
-                state: Arc::new(Mutex::new(task_state.clone())),
+                state: Arc::new(RwLock::new(task_state.clone())),
                 client: reqwest::Client::new(),
                 handle: None
             };
@@ -247,8 +261,8 @@ impl Downloader {
                 task.start().await;
             }
 
-            let task_id = task.state.lock().await.id.clone();
-            let task = Arc::new(Mutex::new(task));
+            let task_id = task.state.read().await.id.clone();
+            let task = Arc::new(RwLock::new(task));
             self.tasks.insert(task_id, task);
         }
 
@@ -261,7 +275,7 @@ impl Downloader {
         for entry in self.tasks.iter() {
             let task_id = *entry.key();
             let task = entry.value();
-            let state = task.lock().await.state.lock().await.clone();
+            let state = task.read().await.state.read().await.clone();
             if state.status == TaskStatus::Completed {
                 tasks_to_remove.push(task_id);
             }

@@ -14,7 +14,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::fs::{OpenOptions, File};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::{Semaphore, Mutex};
+use tokio::sync::{Semaphore, RwLock};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -42,7 +42,7 @@ pub enum TaskStatus {
 
 pub struct DownloadTask {
     // 多线程共享, 每次更改状态应先 lock, 只读使用 clone
-    pub state: Arc<Mutex<DownloadTaskState>>,
+    pub state: Arc<RwLock<DownloadTaskState>>,
     // Client 内部拥有一个连接池且默认拥有一个 Arc 包裹，所以应尽量使用 clone 复用
     pub client: Client,
     // tokio::spawn JoinHandle
@@ -75,15 +75,17 @@ impl DownloadTask {
             client,
             semaphore,
             handle: None,
-            state: Arc::new(Mutex::new(state)),
+            state: Arc::new(RwLock::new(state)),
         }
     }
 
     async fn _start_or_resume(&mut self) {
         let state = self.state.clone();
         {
-            let mut state_guard = state.lock().await;
-            state_guard.status = TaskStatus::Pending;
+            let mut state_guard = state.write().await;
+            if state_guard.status != TaskStatus::Downloading {
+                state_guard.status = TaskStatus::Pending;
+            }
         }
     }
 
@@ -96,7 +98,7 @@ impl DownloadTask {
     }
 
     pub async fn pause(&self) {
-        let mut state = self.state.lock().await;
+        let mut state = self.state.write().await;
         if state.status == TaskStatus::Downloading {
             state.status = TaskStatus::Paused;
             info!("Task has been paused: {}", state.file_path);
@@ -104,7 +106,7 @@ impl DownloadTask {
     }
 
     pub async fn cancel(&self) {
-        let mut state = self.state.lock().await;
+        let mut state = self.state.write().await;
         state.status = TaskStatus::Canceled;
         info!("Task cancellation requested: {}", state.file_path);
     }
@@ -119,19 +121,20 @@ impl DownloadTask {
 }
 
 /// 下载任务
-pub async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> Result<TaskStatus> {
-    // 获取文件大小
+pub async fn download_task(state: Arc<RwLock<DownloadTaskState>>, client: Client) -> Result<TaskStatus> {
+    // Initialize file_size if it's zero
     {
-        let mut state_guard = state.lock().await;
+        let mut state_guard = state.write().await;
         if state_guard.file_size == 0 {
             state_guard.file_size = get_content_length(&client, &state_guard.url)
                 .await
                 .with_context(|| format!("Failed to get content length: {}", &state_guard.url))?;
         }
+        state_guard.status = TaskStatus::Downloading;
     }
 
     let (url, file_path, file_size, chunk_size, retry_times) = {
-        let state_guard = state.lock().await;
+        let state_guard = state.read().await;
         (
             state_guard.url.clone(),
             state_guard.file_path.clone(),
@@ -148,12 +151,17 @@ pub async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client)
         .await
         .with_context(|| format!("File chunk write failed: {}", &file_path))?;
 
-    loop {
-        let start = {
-            let state_guard = state.lock().await;
+    let mut start = {
+        let state_guard = state.read().await;
+        state_guard.downloaded
+    };
+
+    while start < file_size {
+        {
+            let mut state_guard = state.read().await;
             match state_guard.status {
                 TaskStatus::Paused => {
-                    info!("Download has been paused: {}", state_guard.file_path);
+                    info!("Download paused: {}", state_guard.file_path);
                     return Ok(TaskStatus::Paused);
                 }
                 TaskStatus::Canceled => {
@@ -165,14 +173,9 @@ pub async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client)
                     return Err(anyhow::anyhow!("Task failed"));
                 }
                 _ => {}
-            };
-
-            if state_guard.downloaded >= state_guard.file_size {
-                return Ok(TaskStatus::Completed);
             }
+        }
 
-            state_guard.downloaded
-        };
         let end = ((start + chunk_size).min(file_size)) - 1;
 
         let result = download_chunk_with_retry(
@@ -182,20 +185,25 @@ pub async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client)
             end,
             &mut file,
             retry_times,
-            state.clone()
+            state.clone(),
         ).await;
 
         match result {
             Ok(bytes_downloaded) => {
-                let mut state_guard = state.lock().await;
+                let mut state_guard = state.write().await;
                 state_guard.downloaded += bytes_downloaded;
-            },
-            Err(e) => {
-                error!("Download chunk failed: {}", e);
-                return Err(e);
+                start = state_guard.downloaded;
+            }
+            Err(err) => {
+                error!("Chunk download failed: {}", err);
+                let mut state_guard = state.write().await;
+                state_guard.status = TaskStatus::Failed;
+                return Err(err);
             }
         }
     }
+
+    Ok(TaskStatus::Completed)
 }
 
 /// 为下载的 chunk 添加重试
@@ -206,7 +214,7 @@ async fn download_chunk_with_retry(
     end: u64,
     file: &mut File,
     retry_times: usize,
-    state: Arc<Mutex<DownloadTaskState>>,
+    state: Arc<RwLock<DownloadTaskState>>,
 ) -> Result<u64> {
     let mut attempts = 0;
     loop {
@@ -232,7 +240,7 @@ async fn download_chunk(
     start: u64,
     end: u64,
     file: &mut File,
-    state: Arc<Mutex<DownloadTaskState>>
+    state: Arc<RwLock<DownloadTaskState>>
 ) -> Result<u64> {
     let range_header = format!("bytes={}-{}", start, end);
     let resp = client
@@ -248,10 +256,9 @@ async fn download_chunk(
 
         file.seek(SeekFrom::Start(start)).await?;
 
-        // 1MB
-        let buffer_size = 1024 * 1024;
         // Buffer to hold data before writing to disk
         let mut buffer = Vec::new();
+        let buffer_size = 1024 * 1024; // 1MB
 
         while let Some(item) = stream.next().await {
             let chunk = item?;
@@ -265,9 +272,10 @@ async fn download_chunk(
             }
 
             // Check task status
-            let state_guard = state.lock().await;
+            let state_guard = state.read().await;
             match state_guard.status {
                 TaskStatus::Paused | TaskStatus::Canceled => {
+                    // Write remaining buffer to disk
                     if !buffer.is_empty() {
                         file.write_all(&buffer).await?;
                         buffer.clear();
