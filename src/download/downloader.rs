@@ -76,8 +76,8 @@ impl Downloader {
     }
 
     /// 删除任务
-    pub async fn delete_task(&self, id: &Uuid) {
-        if let Some((_, task)) = self.tasks.remove(id) {
+    pub async fn delete_task(&self, id: Uuid) {
+        if let Some((_, task)) = self.tasks.remove(&id) {
             let task_guard = task.lock().await;
             task_guard.cancel().await;
             let state_guard = task_guard.state.lock().await;

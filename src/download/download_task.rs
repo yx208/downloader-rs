@@ -92,7 +92,6 @@ impl DownloadTask {
         {
             let state = self.state.clone();
             let mut state_guard = state.lock().await;
-            // 非暂停或者失败状态，不能恢复下载
             if state_guard.status != TaskStatus::Pending {
                 return;
             }
