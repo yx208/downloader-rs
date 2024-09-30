@@ -48,7 +48,7 @@ pub struct DownloadTask {
     // tokio::spawn JoinHandle
     pub handle: Option<JoinHandle<()>>,
     // 信号量
-    semaphore: Arc<Semaphore>,
+    pub semaphore: Arc<Semaphore>,
 }
 
 impl DownloadTask {
@@ -62,12 +62,12 @@ impl DownloadTask {
         let client = Client::new();
         let state = DownloadTaskState {
             id: Uuid::new_v4(),
-            file_size,
             chunk_size,
             retry_times,
+            file_path,
+            file_size: 0,
             downloaded: 0,
             url: url.clone(),
-            file_path: file_path.clone(),
             status: TaskStatus::Pending
         };
 
@@ -81,8 +81,10 @@ impl DownloadTask {
 
     async fn _start_or_resume(&mut self) {
         let state = self.state.clone();
-        let mut state_guard = state.lock().await;
-        state_guard.status = TaskStatus::Pending;
+        {
+            let mut state_guard = state.lock().await;
+            state_guard.status = TaskStatus::Pending;
+        }
     }
 
     pub async fn start(&mut self) {
@@ -117,7 +119,7 @@ impl DownloadTask {
 }
 
 /// 下载任务
-async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> Result<TaskStatus> {
+pub async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> Result<TaskStatus> {
     // 获取文件大小
     {
         let mut state_guard = state.lock().await;
@@ -128,9 +130,15 @@ async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> 
         }
     }
 
-    let (url, file_path, retry_times) = {
+    let (url, file_path, file_size, chunk_size, retry_times) = {
         let state_guard = state.lock().await;
-        (state_guard.url.clone(), state_guard.file_path.clone(), state_guard.retry_times)
+        (
+            state_guard.url.clone(),
+            state_guard.file_path.clone(),
+            state_guard.file_size,
+            state_guard.chunk_size,
+            state_guard.retry_times
+        )
     };
 
     let mut file = OpenOptions::new()
@@ -141,11 +149,11 @@ async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> 
         .with_context(|| format!("File chunk write failed: {}", &file_path))?;
 
     loop {
-        let (start, end) = {
+        let start = {
             let state_guard = state.lock().await;
             match state_guard.status {
                 TaskStatus::Paused => {
-                    info!("Download has been paused: {}", &file_path);
+                    info!("Download has been paused: {}", state_guard.file_path);
                     return Ok(TaskStatus::Paused);
                 }
                 TaskStatus::Canceled => {
@@ -156,17 +164,16 @@ async fn download_task(state: Arc<Mutex<DownloadTaskState>>, client: Client) -> 
                     error!("Download failed: {}", state_guard.file_path);
                     return Err(anyhow::anyhow!("Task failed"));
                 }
-                _ => ()
+                _ => {}
             };
 
             if state_guard.downloaded >= state_guard.file_size {
-                info!("Download has been completed: {}", &file_path);
                 return Ok(TaskStatus::Completed);
             }
 
-            let start= state_guard.downloaded;
-            (start, ((start + state_guard.chunk_size).min(state_guard.file_size)) - 1)
+            state_guard.downloaded
         };
+        let end = ((start + chunk_size).min(file_size)) - 1;
 
         let result = download_chunk_with_retry(
             &client,
@@ -205,12 +212,12 @@ async fn download_chunk_with_retry(
     loop {
         match download_chunk(client, url, start, end, file, state.clone()).await {
             Ok(bytes_downloaded) => return Ok(bytes_downloaded),
-            Err(error) => {
+            Err(e) => {
                 attempts += 1;
-                if attempts > retry_times {
-                    return Err(error);
+                if attempts >= retry_times {
+                    return Err(e);
                 } else {
-                    error!("Download failed, retrying ({}/{}): {}", attempts, retry_times, error);
+                    error!("Download failed, retrying ({}/{}): {}", attempts, retry_times, e);
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
@@ -262,15 +269,19 @@ async fn download_chunk(
             match state_guard.status {
                 TaskStatus::Paused | TaskStatus::Canceled => {
                     if !buffer.is_empty() {
-                        file.write_all(buffer.as_slice()).await?;
+                        file.write_all(&buffer).await?;
                         buffer.clear();
                     }
 
                     info!("Download interrupted: {}", state_guard.file_path);
                     return Ok(total_bytes);
                 }
-                _ => ()
+                _ => {}
             };
+        }
+
+        if !buffer.is_empty() {
+            file.write_all(&buffer).await?;
         }
 
         Ok(total_bytes)

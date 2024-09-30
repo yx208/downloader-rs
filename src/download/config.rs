@@ -3,16 +3,16 @@
 //!
 
 use std::fs;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct DownloadConfig {
     pub url: String,
     pub file_name: Option<String>
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Config {
     pub max_concurrent_downloads: usize,
     pub chunk_size: u64,
