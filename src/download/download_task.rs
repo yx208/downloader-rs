@@ -331,7 +331,7 @@ mod tests {
         let mut download_dir = dirs::download_dir().unwrap();
         download_dir.push("demo.mp4");
 
-        let url = "https://oss.xgy.tv/xgy/design/test/cool.mp4";
+        let url = "https://example.com/large_file.zip";
         let file_path = download_dir.to_str().unwrap();
         let chunk_size = 1024 * 1024 * 5;
         let retry_times = 3;
