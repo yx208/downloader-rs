@@ -27,16 +27,8 @@ pub fn build_downloader() -> (downloader::Downloader, scheduler::Scheduler) {
 }
 
 mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
-    use async_channel::unbounded;
-    use dashmap::DashMap;
-    use tokio::sync::Semaphore;
     use log::{info};
-    use super::*;
-
-    use crate::download::config::Config;
-    use crate::download::download_task::{DownloadTaskState, TaskStatus};
+    use crate::download::download_task::DownloadTaskState;
 
     fn print_progress(tasks: &Vec<DownloadTaskState>) {
         for task in tasks {

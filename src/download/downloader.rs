@@ -9,12 +9,11 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use dashmap::DashMap;
 use log::{info, error};
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::RwLock;
 use uuid::Uuid;
-use async_channel::{Sender, Receiver};
+use async_channel::Sender;
 
-use crate::download::download_task::{download_task, DownloadTask, DownloadTaskState, TaskStatus};
-use crate::download::persistence::PersistenceState;
+use crate::download::download_task::{DownloadTask, DownloadTaskState, TaskStatus};
 
 pub type DownloaderTasks = Arc<DashMap<Uuid, Arc<RwLock<DownloadTask>>>>;
 

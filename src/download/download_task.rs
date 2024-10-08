@@ -13,8 +13,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::fs::{OpenOptions, File};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::{Semaphore, RwLock};
-use tokio::task::JoinHandle;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 #[derive(Deserialize, Serialize, Clone)]

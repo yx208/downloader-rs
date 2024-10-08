@@ -53,7 +53,6 @@ impl Scheduler {
             };
 
             let pending_sender = self.pending_sender.clone();
-            let tasks_clone = self.tasks.clone();
 
             tokio::spawn(async move {
                 let client = task.read().await.client.clone();
