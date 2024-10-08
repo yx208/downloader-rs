@@ -44,20 +44,10 @@ pub struct DownloadTask {
     pub state: Arc<RwLock<DownloadTaskState>>,
     // Client 内部拥有一个连接池且默认拥有一个 Arc 包裹，所以应尽量使用 clone 复用
     pub client: Client,
-    // tokio::spawn JoinHandle
-    pub handle: Option<JoinHandle<()>>,
-    // 信号量
-    pub semaphore: Arc<Semaphore>,
 }
 
 impl DownloadTask {
-    pub fn new(
-        url: String,
-        file_path: String,
-        chunk_size: u64,
-        retry_times: usize,
-        semaphore: Arc<Semaphore>
-    ) -> Self {
+    pub fn new(url: String, file_path: String, chunk_size: u64, retry_times: usize) -> Self {
         let client = Client::new();
         let state = DownloadTaskState {
             id: Uuid::new_v4(),
@@ -72,35 +62,15 @@ impl DownloadTask {
 
         DownloadTask {
             client,
-            semaphore,
-            handle: None,
             state: Arc::new(RwLock::new(state)),
         }
-    }
-
-    async fn _start_or_resume(&mut self) {
-        let state = self.state.clone();
-        {
-            let mut state_guard = state.write().await;
-            if state_guard.status != TaskStatus::Downloading {
-                state_guard.status = TaskStatus::Pending;
-            }
-        }
-    }
-
-    pub async fn start(&mut self) {
-        self._start_or_resume().await;
-    }
-
-    pub async fn resume(&mut self) {
-        self._start_or_resume().await;
     }
 
     pub async fn pause(&self) {
         let mut state = self.state.write().await;
         if state.status == TaskStatus::Downloading {
             state.status = TaskStatus::Paused;
-            info!("Task has been paused: {}", state.file_path);
+            info!("Task pause requested: {}", state.file_path);
         }
     }
 
@@ -108,14 +78,6 @@ impl DownloadTask {
         let mut state = self.state.write().await;
         state.status = TaskStatus::Canceled;
         info!("Task cancellation requested: {}", state.file_path);
-    }
-
-    pub fn is_finished(&self) -> bool {
-        if let Some(handle) = &self.handle {
-            handle.is_finished()
-        } else {
-            false
-        }
     }
 }
 
@@ -260,7 +222,7 @@ async fn download_chunk(
 
         // Buffer to hold data before writing to disk
         let mut buffer = Vec::new();
-        let buffer_size = 1024 * 1024 * 5; // 1MB
+        let buffer_size = 1024 * 1024 * 5; // 5MB
 
         while let Some(item) = stream.next().await {
             let chunk = item?;

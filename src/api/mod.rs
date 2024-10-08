@@ -4,7 +4,7 @@ use axum::routing::{get, post};
 use axum::extract::{Form};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
+use crate::download::build_downloader;
 use crate::download::config::Config;
 use crate::download::download_task::DownloadTaskState;
 use crate::download::downloader::Downloader;
@@ -30,14 +30,18 @@ struct AddTaskParams {
 }
 
 pub async fn setup_server() {
-    let config = Arc::new(Config::default());
-    let downloader = Downloader::new_default();
     let app = Router::new()
         .route("/task/list", get(task_list))
         .route("/task/add", post(add_task))
         .route("/task/pause", post(pause_task))
-        .layer(Extension(downloader))
-        .layer(Extension(config));
+        .layer({
+            let (downloader, scheduler) = build_downloader();
+            tokio::spawn(async move {
+                scheduler.run().await
+            });
+            Extension(Arc::new(downloader))
+        })
+        .layer(Extension(Arc::new(Config::default())));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:6060").await.unwrap();
     axum::serve(listener, app).await.unwrap();
