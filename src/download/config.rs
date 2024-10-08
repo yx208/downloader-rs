@@ -3,6 +3,7 @@
 //!
 
 use std::fs;
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
@@ -17,7 +18,7 @@ pub struct Config {
     pub max_concurrent_downloads: usize,
     pub chunk_size: u64,
     pub retry_times: usize,
-    pub download_dir: String,
+    pub download_dir: PathBuf,
     pub tasks: Vec<DownloadConfig>
 }
 
@@ -37,7 +38,7 @@ impl Default for Config {
             max_concurrent_downloads: 6,
             chunk_size: 1024 * 1024 * 10,
             retry_times: 3,
-            download_dir: dir.to_str().unwrap().to_string(),
+            download_dir: dir,
             tasks: Vec::new()
         }
     }
