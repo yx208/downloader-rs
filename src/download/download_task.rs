@@ -230,6 +230,8 @@ async fn download_chunk_with_retry(
                 }
             }
         }
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
 
@@ -250,24 +252,25 @@ async fn download_chunk(
         .await
         .with_context(|| format!("Failed to send request: {}", url))?;
 
+    // 请求成功，以流的形式读取
     if resp.status() == reqwest::StatusCode::PARTIAL_CONTENT || resp.status().is_success() {
         let mut stream = resp.bytes_stream();
-        let mut total_bytes = 0;
+        let mut total_bytes: u64 = 0;
 
         file.seek(SeekFrom::Start(start)).await?;
 
         // Buffer to hold data before writing to disk
         let mut buffer = Vec::new();
-        let buffer_size = 1024 * 1024; // 1MB
+        let buffer_size = 1024 * 1024 * 5; // 1MB
 
         while let Some(item) = stream.next().await {
             let chunk = item?;
             buffer.extend_from_slice(&chunk);
-            total_bytes += chunk.len() as u64;
 
             // If buffer is full, write to disk
             if buffer.len() >= buffer_size {
                 file.write_all(&buffer).await?;
+                total_bytes += buffer.len() as u64;
                 buffer.clear();
             }
 
@@ -278,6 +281,7 @@ async fn download_chunk(
                     // Write remaining buffer to disk
                     if !buffer.is_empty() {
                         file.write_all(&buffer).await?;
+                        total_bytes += buffer.len() as u64;
                         buffer.clear();
                     }
 
@@ -290,6 +294,8 @@ async fn download_chunk(
 
         if !buffer.is_empty() {
             file.write_all(&buffer).await?;
+            total_bytes += buffer.len() as u64;
+            buffer.clear();
         }
 
         Ok(total_bytes)
