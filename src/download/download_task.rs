@@ -2,7 +2,6 @@
 //! # 下载任务模块
 //!
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::io::SeekFrom;
@@ -158,7 +157,7 @@ pub async fn download_task(state: Arc<RwLock<DownloadTaskState>>, client: Client
 
     while start < file_size {
         {
-            let mut state_guard = state.read().await;
+            let state_guard = state.read().await;
             match state_guard.status {
                 TaskStatus::Paused => {
                     info!("Download paused: {}", state_guard.file_path);

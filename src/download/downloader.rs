@@ -14,7 +14,6 @@ use uuid::Uuid;
 use async_channel::{Sender, Receiver};
 
 use crate::download::download_task::{download_task, DownloadTask, DownloadTaskState, TaskStatus};
-use crate::download::download_task::TaskStatus::Pending;
 use crate::download::persistence::PersistenceState;
 
 pub struct Downloader {
@@ -57,7 +56,7 @@ impl Downloader {
         // Handle existing file names
         file_path = self.handle_existing_file(&file_path).await;
 
-        let mut task = DownloadTask::new(
+        let task = DownloadTask::new(
             url.clone(),
             file_path,
             chunk_size,
@@ -103,7 +102,7 @@ impl Downloader {
     }
 
     /// 开始调度
-    fn start_scheduler(self: Arc<Self>) {
+    async fn start_scheduler(self: Arc<Self>) {
         let downloader = self.clone();
         // 建立一个线程，循环处理任务调度
         tokio::spawn(async move {
@@ -129,7 +128,7 @@ impl Downloader {
 
                 // Set the task status to Downloading
                 {
-                    let mut task_guard = task.write().await;
+                    let task_guard = task.write().await;
                     let mut state_guard = task_guard.state.write().await;
                     state_guard.status = TaskStatus::Downloading;
                 }
