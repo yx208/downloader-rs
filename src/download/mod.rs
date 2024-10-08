@@ -28,7 +28,10 @@ pub fn build_downloader() -> (downloader::Downloader, scheduler::Scheduler) {
 
 mod tests {
     use log::{info};
-    use crate::download::download_task::DownloadTaskState;
+    use std::time::Duration;
+    use crate::download::download_task::{DownloadTaskState, TaskStatus};
+    use crate::download::config::Config;
+    use crate::download::build_downloader;
 
     fn print_progress(tasks: &Vec<DownloadTaskState>) {
         for task in tasks {
