@@ -20,7 +20,6 @@ pub fn build_downloader() -> (downloader::Downloader, scheduler::Scheduler) {
         tasks.clone(),
         semaphore.clone(),
         pending_receiver,
-        pending_sender.clone(),
     );
 
     (downloader, scheduler)

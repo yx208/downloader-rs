@@ -45,6 +45,19 @@ impl Downloader {
         Ok(task_id)
     }
 
+    async fn count_same_file(&self, file_path: &str) -> usize {
+        let mut counter = 1;
+        for task in self.tasks.iter() {
+            let task_guard = task.value().read().await;
+            let state_guard = task_guard.state.read().await;
+            if state_guard.file_path == file_path {
+                counter += 1;
+            }
+        }
+
+        counter
+    }
+
     /// 处理文件夹中文件重名问题
     async fn handle_existing_file(&self, file_path: &str) -> String {
         let original_path = PathBuf::from(file_path);
@@ -58,7 +71,7 @@ impl Downloader {
             .unwrap_or_default();
 
         let mut path = original_path.clone();
-        let mut counter = 1;
+        let mut counter = self.count_same_file(file_path).await;
 
         while path.exists() {
             let new_filename = if extension.is_empty() {
@@ -102,6 +115,7 @@ impl Downloader {
                 state_guard.status = TaskStatus::Pending;
                 // Re-add to pending queue
                 self.pending_sender.send(id).await.unwrap();
+                info!("Task resumed: {}", state_guard.file_path);
             }
         }
     }

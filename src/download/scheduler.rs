@@ -10,9 +10,7 @@ use crate::download::downloader::DownloaderTasks;
 pub struct Scheduler {
     tasks: DownloaderTasks,
     semaphore: Arc<Semaphore>,
-    pending_receiver: Receiver<Uuid>,
-    // Needed to re-add paused tasks
-    pending_sender: Sender<Uuid>
+    pending_receiver: Receiver<Uuid>
 }
 
 impl Scheduler {
@@ -20,13 +18,11 @@ impl Scheduler {
         tasks: DownloaderTasks,
         semaphore: Arc<Semaphore>,
         pending_receiver: Receiver<Uuid>,
-        pending_sender: Sender<Uuid>
     ) -> Self {
         Self {
             tasks,
             semaphore,
-            pending_receiver,
-            pending_sender,
+            pending_receiver
         }
     }
 
@@ -52,7 +48,15 @@ impl Scheduler {
                 }
             };
 
-            let pending_sender = self.pending_sender.clone();
+            // Check if the task is still pending
+            {
+                let task_guard =  task.read().await;
+                let state = task_guard.state.read().await;
+                if state.status != TaskStatus::Pending {
+                    drop(permit);
+                    continue;
+                }
+            }
 
             tokio::spawn(async move {
                 let client = task.read().await.client.clone();
@@ -69,11 +73,8 @@ impl Scheduler {
                         info!("Download completed: {}", state_guard.file_path);
                     }
                     Ok(TaskStatus::Paused) => {
-                        // Already to set Paused
+                        // Task remains is paused; do not re-add to pending queue
                         info!("Task paused: {}", state_guard.file_path);
-                        // Re-add to pending queue
-                        // Let the next Pending task download
-                        pending_sender.send(task_id).await.unwrap();
                     }
                     Ok(TaskStatus::Canceled) => {
                         state_guard.status = TaskStatus::Canceled;
@@ -85,10 +86,10 @@ impl Scheduler {
                     },
                     _ => {}
                 }
-            });
 
-            // Release
-            drop(permit);
+                // Release
+                drop(permit);
+            });
         }
     }
 }
