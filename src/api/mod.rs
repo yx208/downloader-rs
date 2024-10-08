@@ -73,3 +73,12 @@ async fn pause_task(Extension(downloader): Extension<Arc<Downloader>>, Form(form
         message: "Successfully added task!".to_string(),
     })
 }
+
+mod tests {
+    #[test]
+    fn test_dir() {
+        let mut v = dirs::config_dir().unwrap();
+        v.push("downloader");
+        println!("{:?}", v);
+    }
+}
