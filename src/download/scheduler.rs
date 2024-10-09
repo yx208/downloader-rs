@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::{Semaphore};
-use async_channel::{Receiver, Sender};
+use async_channel::{Receiver};
 use log::{info, error};
 use uuid::Uuid;
 

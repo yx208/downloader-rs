@@ -27,10 +27,9 @@ pub fn build_downloader() -> (downloader::Downloader, scheduler::Scheduler) {
 
 mod tests {
     use log::{info};
-    use std::time::Duration;
-    use crate::download::download_task::{DownloadTaskState, TaskStatus};
-    use crate::download::config::Config;
-    use crate::download::build_downloader;
+    use crate::download::*;
+    use crate::download::config::*;
+    use crate::download::download_task::*;
 
     fn print_progress(tasks: &Vec<DownloadTaskState>) {
         for task in tasks {
@@ -87,7 +86,7 @@ mod tests {
                 break;
             }
 
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
 }

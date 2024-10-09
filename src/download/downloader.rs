@@ -45,35 +45,18 @@ impl Downloader {
         Ok(task_id)
     }
 
-    async fn count_same_file(&self, file_path: &str) -> usize {
-        let mut counter = 1;
-        for task in self.tasks.iter() {
-            let task_guard = task.value().read().await;
-            let state_guard = task_guard.state.read().await;
-            if state_guard.file_path == file_path {
-                counter += 1;
-            }
-        }
-
-        counter
-    }
-
-    /// 处理文件夹中文件重名问题
+    /// Handle same file
     async fn handle_existing_file(&self, file_path: &str) -> String {
-        let original_path = PathBuf::from(file_path);
-        let parent_dir = original_path.parent().unwrap();
-        let file_stem = original_path.file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let extension = original_path.extension()
-            .map(|x| x.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let (parent_dir, file_stem, extension) = parse_filename(file_path);
+        let tasks: Vec<PathBuf> = self.get_tasks().await
+            .iter()
+            .map(|t| PathBuf::from(&t.file_path))
+            .collect();
 
-        let mut path = original_path.clone();
-        let mut counter = self.count_same_file(file_path).await;
+        let mut path = PathBuf::from(file_path);
+        let mut counter = 1;
 
-        while path.exists() {
+        while path.exists() || tasks.contains(&path) {
             let new_filename = if extension.is_empty() {
                 format!("{}_{}", file_stem, counter)
             } else {
@@ -162,4 +145,18 @@ impl Downloader {
             self.tasks.remove(&task_id);
         }
     }
+}
+
+fn parse_filename(file_path: &str) -> (PathBuf, String, String) {
+    let original_path = PathBuf::from(file_path);
+    let parent_dir = original_path.parent().unwrap().to_owned();
+    let file_stem = original_path.file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let extension = original_path.extension()
+        .map(|x| x.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    (parent_dir, file_stem, extension)
 }

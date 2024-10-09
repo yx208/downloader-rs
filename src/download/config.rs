@@ -36,7 +36,7 @@ impl Default for Config {
         let dir = dirs::download_dir().unwrap();
         Self {
             max_concurrent_downloads: 6,
-            chunk_size: 1024 * 1024 * 10,
+            chunk_size: 1024 * 1024 * 5,
             retry_times: 3,
             download_dir: dir,
             tasks: Vec::new()
