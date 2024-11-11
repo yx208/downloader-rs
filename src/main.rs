@@ -1,8 +1,6 @@
-mod download;
-mod cli;
-mod api;
+mod error;
 
 #[tokio::main]
 async fn main() {
-    api::setup_server().await;
+
 }
