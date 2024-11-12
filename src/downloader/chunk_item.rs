@@ -46,6 +46,17 @@ impl ChunkItem {
             self.chunk_info.range.len()
         );
     }
+    
+    /// 持久化数据到磁盘
+    async fn persistence(&self, bytes: &Bytes) -> Result<()> {
+        let mut file = self.file.lock().await;
+        file.seek(SeekFrom::Start(self.chunk_info.range.start)).await?;
+        file.write_all(bytes).await?;
+        file.flush().await?;
+        file.sync_all().await?;
+
+        Ok(())
+    }
 
     pub(crate) async fn download_chunk(
         self: Arc<Self>,
@@ -93,6 +104,8 @@ impl ChunkItem {
 
                             // 无论是出错还是取消，都需要写入磁盘进行持久化
                             if current_retry_count > retry_count {
+                                // self.persistence(chunk_bytes.as_ref()).await?;
+
                                 let mut file = self.file.lock().await;
                                 file.seek(SeekFrom::Start(self.chunk_info.range.start)).await?;
                                 file.write_all(chunk_bytes.as_ref()).await?;
@@ -121,6 +134,8 @@ impl ChunkItem {
             result = future => {
                 result?;
 
+                // self.persistence(chunk_bytes.as_ref()).await?;
+
                 let mut file = self.file.lock().await;
                 file.seek(SeekFrom::Start(self.chunk_info.range.start)).await?;
                 file.write_all(chunk_bytes.as_ref()).await?;
@@ -130,6 +145,8 @@ impl ChunkItem {
                 Ok(DownloadingEndCause::DownloadFinished)
             }
             _ = cancel_token.cancelled() => {
+                // self.persistence(chunk_bytes.as_ref()).await?;
+
                 let mut file = self.file.lock().await;
                 file.seek(SeekFrom::Start(self.chunk_info.range.start)).await?;
                 file.write_all(chunk_bytes.as_ref()).await?;

@@ -259,6 +259,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "headers",
+ "parking_lot",
  "reqwest",
  "serde",
  "thiserror",
