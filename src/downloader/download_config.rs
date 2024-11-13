@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use headers::{HeaderMap, HeaderMapExt};
 use reqwest::Request;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 type HttpRequestConfigureFutureFn = Box<dyn Fn(Request) -> Request + Send + Sync + 'static>;
@@ -26,6 +27,7 @@ pub struct HttpDownloadConfig {
     pub downloaded_len_send_interval: Option<Duration>,
     pub strict_check_accept_ranges: bool,
     pub http_request_configure: Option<HttpRequestConfigureFutureFn>,
+    pub cancel_token: Option<CancellationToken>,
     pub use_browser_use_agent: bool,
 }
 
@@ -45,7 +47,7 @@ impl HttpDownloadConfig {
          for (header_name, header_value) in self.header_map.iter() {
              header_map.insert(header_name, header_value.clone());
          }
-         
+
          match self.http_request_configure.as_ref() {
              None => request,
              Some(cfg) => cfg(request),

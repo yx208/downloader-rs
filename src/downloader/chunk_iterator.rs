@@ -48,7 +48,7 @@ impl RemainingChunks {
                     // 没有长度，继续向下获取，并把这个移除
                     0 => {
                         self.handle(ChunkHandle::Remove(0));
-                        return self.task_first();
+                        return self.take_first();
                     },
                     // 获取到正确的长度，创建一个 range 副本，并把这个 range 移除
                     len if len <= chunk_size => {
@@ -152,11 +152,11 @@ pub struct ChunkRange {
 }
 
 impl ChunkRange {
-    pub fn new(start: u64, end: u64) -> ChunkRange {
+    pub fn new(start: u64, end: u64) -> Self {
         Self { start, end }
     }
 
-    pub fn from_len(start: u64, len: u64) -> ChunkRange {
+    pub fn from_len(start: u64, len: u64) -> Self {
         Self { start, end: start + len - 1 }
     }
 
@@ -169,7 +169,7 @@ impl ChunkRange {
     }
 }
 
-impl RangeBounds<u64> for ChunkRange {
+impl<'a> RangeBounds<u64> for &'a ChunkRange {
     fn start_bound(&self) -> Bound<&u64> {
         Bound::Included(&self.start)
     }

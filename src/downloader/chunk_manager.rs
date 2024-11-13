@@ -218,14 +218,14 @@ impl ChunkManager {
                          // 取出值
                          let i = *receiver.borrow();
                          (receiver, i)
-                     }));
+                     }.boxed()));
                 }
                 // 下载完成
                 RunFutureResult::ChunkDownloadEnd {
                     chunk_index,
                     result: Ok(DownloadingEndCause::DownloadFinished)
                 } => {
-                    let (downloading_chunk_count) = self.remove_chunk(chunk_index);
+                    let (downloading_chunk_count, _) = self.remove_chunk(chunk_index).await;
 
                     // breakpoint resume
                     // save_data().await;
