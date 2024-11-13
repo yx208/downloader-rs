@@ -85,6 +85,7 @@ impl RemainingChunks {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ChunkData {
     // 获取了多少次 next range
     pub iter_count: usize,

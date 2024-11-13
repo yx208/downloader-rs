@@ -32,26 +32,30 @@ pub struct HttpDownloadConfig {
 }
 
 impl HttpDownloadConfig {
-     pub fn create_http_request(&self) -> Request {
-         let url = (*self.url).clone();
-         let mut request = Request::new(reqwest::Method::GET, url);
-         let header_map = request.headers_mut();
+    pub fn file_path(&self) -> PathBuf {
+        self.save_dir.join(&self.file_name)
+    }
 
-         // 设置 Agent
-         if self.use_browser_use_agent {
-             let agent = headers::HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36").unwrap();
-             header_map.insert(reqwest::header::USER_AGENT, agent);
-         }
-         header_map.insert(reqwest::header::ACCEPT, headers::HeaderValue::from_str("*/*").unwrap());
-         header_map.typed_insert(headers::Connection::keep_alive());
-         for (header_name, header_value) in self.header_map.iter() {
-             header_map.insert(header_name, header_value.clone());
-         }
+    pub fn create_http_request(&self) -> Request {
+        let url = (*self.url).clone();
+        let mut request = Request::new(reqwest::Method::GET, url);
+        let header_map = request.headers_mut();
 
-         match self.http_request_configure.as_ref() {
-             None => request,
-             Some(cfg) => cfg(request),
-         }
-     }
+        // 设置 Agent
+        if self.use_browser_use_agent {
+            let agent = headers::HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36").unwrap();
+            header_map.insert(reqwest::header::USER_AGENT, agent);
+        }
+        header_map.insert(reqwest::header::ACCEPT, headers::HeaderValue::from_str("*/*").unwrap());
+        header_map.typed_insert(headers::Connection::keep_alive());
+        for (header_name, header_value) in self.header_map.iter() {
+            header_map.insert(header_name, header_value.clone());
+        }
+
+        match self.http_request_configure.as_ref() {
+            None => request,
+            Some(cfg) => cfg(request),
+        }
+    }
 }
 

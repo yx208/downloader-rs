@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::num::NonZeroU8;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -47,13 +48,13 @@ pub struct ChunkManager {
 
 impl ChunkManager {
     pub fn new(
-        connection_count: u8,
+        connection_count: NonZeroU8,
         client: Client,
         cancel_token: CancellationToken,
         chunk_iterator: ChunkIterator,
         retry_count: u8
     ) -> Self {
-        let (tx, rx) = watch::channel(connection_count);
+        let (tx, rx) = watch::channel(connection_count.get());
 
         Self {
             client,

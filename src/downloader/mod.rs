@@ -16,8 +16,16 @@ use headers::HeaderMap;
 use reqwest::Request;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use crate::downloader::chunk_iterator::ChunkData;
 use crate::downloader::download_config::HttpDownloadConfig;
 use crate::downloader::downloader::{ExtendedHttpFileDownloader, HttpFileDownloader};
+
+#[derive(Debug, Clone)]
+pub struct DownloadArchiveData {
+    pub downloaded_len: u64,
+    pub downloading_duration: u32,
+    pub chunk_data: Option<ChunkData>
+}
 
 pub struct HttpDownloaderBuilder {
     chunk_size: NonZeroUsize,
