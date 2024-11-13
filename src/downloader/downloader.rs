@@ -7,15 +7,39 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+use anyhow::Result;
+use futures_util::future::BoxFuture;
+use thiserror::Error;
 use crate::downloader::download_config::HttpDownloadConfig;
 use crate::downloader::download_way::DownloadWay;
+use crate::extension::DownloaderWrapper;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
+pub enum DownloadStartError {
+    #[error("File create failed，{:?}", .0)]
+    FileCreateFailed(#[from] tokio::io::Error),
+
+    #[error("Already downloading")]
+    AlreadyDownloading,
+
+    #[error("Initializing")]
+    Initializing,
+
+    #[error("Starting")]
+    Starting,
+
+    #[error("Stopping")]
+    Stopping
+}
+
+#[derive(Debug, Error)]
 pub enum DownloadError {
     #[error("{:?}", .0)]
     Other(#[from] anyhow::Error),
+
     #[error("IoError，{:?}", .0)]
     IOError(#[from] tokio::io::Error),
+
     #[error("http request failed, {:?}", .0)]
     HttpRequestFailed(#[from] reqwest::Error)
 }
@@ -79,8 +103,31 @@ impl HttpFileDownloader {
             yield downloaded_len;
 
             while downloaded_len_receiver.changed().await.is_ok() {
+                let downloaded_len = *downloaded_len_receiver.borrow();
+                yield downloaded_len;
 
+                if let Some(duration) = duration {
+                    tokio::time::sleep(duration).await;
+                }
             }
         }
+    }
+}
+
+type DownloadFuture = BoxFuture<'static, Result<DownloadingEndCause, DownloadError>>;
+
+pub struct ExtendedHttpFileDownloader {
+    pub inner: HttpFileDownloader,
+}
+
+impl ExtendedHttpFileDownloader {
+    pub fn new(downloader: HttpFileDownloader) -> Self {
+        Self {
+            inner: downloader,
+        }
+    }
+
+    pub fn prepare_download(&mut self) -> Result<DownloadFuture> {
+        todo!()
     }
 }
