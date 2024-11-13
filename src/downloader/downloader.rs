@@ -3,9 +3,9 @@ use std::io::SeekFrom;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use futures_util::{FutureExt, Stream};
+use futures_util::{FutureExt};
 use parking_lot::RwLock;
-use reqwest::{Client, Error, Response};
+use reqwest::{Client, Response};
 use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio::sync::oneshot;
@@ -125,26 +125,6 @@ impl HttpFileDownloader {
     pub fn is_downloading(&self) -> bool {
         self.downloading_state.read().is_some()
     }
-
-    // pub fn downloaded_len_stream(&self) -> impl Stream<Item = u64> + 'static {
-    //     let mut downloaded_len_receiver = self.downloaded_len_receiver.clone();
-    //     let duration = self.config.downloaded_len_send_interval.clone();
-    //
-    //     // 定义异步流
-    //     async_stream::stream! {
-    //         let downloaded_len = *downloaded_len_receiver.borrow();
-    //         yield downloaded_len;
-    //
-    //         while downloaded_len_receiver.changed().await.is_ok() {
-    //             let downloaded_len = *downloaded_len_receiver.borrow();
-    //             yield downloaded_len;
-    //
-    //             if let Some(duration) = duration {
-    //                 tokio::time::sleep(duration).await;
-    //             }
-    //         }
-    //     }
-    // }
 
     fn reset(&self) {
         // 重置长度
