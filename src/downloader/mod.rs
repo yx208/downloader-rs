@@ -4,6 +4,7 @@ pub mod chunk_manager;
 pub mod downloader;
 pub mod download_config;
 pub mod download_way;
+pub mod exclusive;
 
 use std::borrow::Cow;
 use std::num::{NonZeroU8, NonZeroUsize};

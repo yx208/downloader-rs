@@ -33,7 +33,7 @@ pub struct HttpDownloadConfig {
 
 impl HttpDownloadConfig {
      pub fn create_http_request(&self) -> Request {
-         let mut url = (*self.url).clone();
+         let url = (*self.url).clone();
          let mut request = Request::new(reqwest::Method::GET, url);
          let header_map = request.headers_mut();
 
