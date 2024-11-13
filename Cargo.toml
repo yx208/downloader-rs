@@ -19,3 +19,4 @@ serde = "1.0.215"
 thiserror = "2.0.3"
 tokio = { version = "1.41.1", features = ["full"] }
 tokio-util = "0.7.12"
+url = "2.5.3"
