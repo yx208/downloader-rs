@@ -1,7 +1,6 @@
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::select;
 use url::Url;
 use crate::downloader::download_config::HttpDownloadConfig;
 use crate::downloader::downloader::HttpFileDownloader;

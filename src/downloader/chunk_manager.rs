@@ -136,6 +136,7 @@ impl ChunkManager {
         let download_next_chunk = || async {
             match self.download_next_chunk(file.clone(), ChunkManager::clone_request(&request)).await {
                 Some((chunk_index, future)) => {
+                    println!("{}", chunk_index);
                     Some(RunFuture::ChunkDownloadEnd {
                         chunk_index,
                         future: future.boxed()

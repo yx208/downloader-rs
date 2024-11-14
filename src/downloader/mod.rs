@@ -1,10 +1,10 @@
-pub mod chunk_item;
-pub mod chunk_iterator;
-pub mod chunk_manager;
-pub mod downloader;
-pub mod download_config;
-pub mod download_way;
-pub mod exclusive;
+pub(crate) mod chunk_item;
+pub(crate) mod chunk_iterator;
+pub(crate) mod chunk_manager;
+pub(crate) mod downloader;
+pub(crate) mod download_config;
+pub(crate) mod download_way;
+pub(crate) mod exclusive;
 
 use std::borrow::Cow;
 use std::num::{NonZeroU8, NonZeroUsize};

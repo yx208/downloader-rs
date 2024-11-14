@@ -76,9 +76,16 @@ impl RemainingChunks {
             ChunkHandle::Update { index, range } => {
                 self.ranges[index] = range;
             }
-            ChunkHandle::Split { .. } => {}
-            ChunkHandle::Remove(_) => {}
-            ChunkHandle::Error => {}
+            ChunkHandle::Split { index, left, right } => {
+                self.ranges[index] = right;
+                self.ranges.insert(index, left);
+            }
+            ChunkHandle::Remove(index) => {
+                self.ranges.remove(index);
+            }
+            ChunkHandle::Error => {
+                return false;
+            }
         }
 
         true
@@ -98,6 +105,7 @@ impl ChunkData {
     pub fn next_chunk_range(&mut self) -> Option<ChunkInfo> {
         // 如果有未完成的，则先使用
         if let Some(chunk) = self.last_incomplete_chunks.pop() {
+            println!("pop");
             return Some(chunk);
         }
 
