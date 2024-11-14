@@ -9,12 +9,12 @@ use reqwest::{Client, Response};
 use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio::sync::oneshot;
+use tokio::io::AsyncSeekExt;
 use tokio_util::sync::CancellationToken;
 use anyhow::Result;
 use futures_util::future::BoxFuture;
 use headers::HeaderMapExt;
 use thiserror::Error;
-use tokio::io::AsyncSeekExt;
 use crate::downloader::chunk_iterator::{ChunkData, ChunkIterator, RemainingChunks};
 use crate::downloader::chunk_manager::ChunkManager;
 use crate::downloader::download_config::HttpDownloadConfig;
@@ -313,7 +313,10 @@ impl HttpFileDownloader {
 
                         DownloadWay::Ranges(chunk_manager)
                     } else {
-                        DownloadWay::Single(SingleDownload::new())
+                        DownloadWay::Single(SingleDownload::new(
+                            cancel_token,
+                            content_length
+                        ))
                     }
                 };
 

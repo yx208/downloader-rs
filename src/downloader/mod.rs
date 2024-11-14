@@ -92,7 +92,6 @@ impl HttpDownloaderBuilder {
                 chunks_send_interval: None,
                 save_dir: self.save_dir,
                 file_name: self.file_name.unwrap_or_else(|| self.url.file_name().to_string()),
-                open_option: self.open_option,
                 create_dir: self.create_dir,
                 url: Arc::new(self.url),
                 request_retry_count: self.request_retry_count,

@@ -19,7 +19,6 @@ pub struct HttpDownloadConfig {
     pub chunks_send_interval: Option<Duration>,
     pub save_dir: PathBuf,
     pub file_name: String,
-    pub open_option: DownloadFileOpenOption,
     pub create_dir: bool,
     pub url: Arc<Url>,
     pub request_retry_count: u8,
