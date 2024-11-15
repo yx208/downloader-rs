@@ -164,7 +164,7 @@ mod tests {
     #[tokio::test]
     async fn should_be_run() -> Result<()> {
         let file_url = Url::parse("http://localhost:23333/image.jpg")?;
-        let file_size = get_file_length(file_url.clone()).await?.unwrap();
+        let file_size = get_file_length(file_url.clone()).await.unwrap();
         let mut remaining = RemainingChunks::new(NonZeroUsize::new(1024 * 1024 * 4).unwrap(), file_size);
 
         let chunk_iter = ChunkIterator::new(ChunkIteratorData { iter_count: 0, remaining });

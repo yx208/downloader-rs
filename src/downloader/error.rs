@@ -2,7 +2,14 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum DownloadStartError {
+    #[error("File create failed, {:?}", .0)]
+    FileCreateFailed(#[from] tokio::io::Error),
 
+    #[error("Already downloading")]
+    AlreadyDownloading,
+
+    #[error("Directory does not exist")]
+    DirectoryDoesNotExist,
 }
 
 #[derive(Error, Debug)]

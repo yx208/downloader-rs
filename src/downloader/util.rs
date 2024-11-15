@@ -2,7 +2,7 @@ use reqwest::{Client, Request};
 use url::Url;
 use crate::downloader::error::DownloadError;
 
-pub async fn get_file_length(url: Url) -> anyhow::Result<Option<u64>, DownloadError> {
+pub async fn get_file_length(url: Url) -> Option<u64> {
     let request = Request::new(reqwest::Method::HEAD, url);
     let client = Client::new();
 
@@ -11,15 +11,13 @@ pub async fn get_file_length(url: Url) -> anyhow::Result<Option<u64>, DownloadEr
             if let Some(content_length) = response.headers().get(reqwest::header::CONTENT_LENGTH) {
                 if let Ok(length) = content_length.to_str() {
                     if let Ok(length) = length.parse::<u64>() {
-                        return Ok(Some(length))
+                        return Some(length)
                     }
                 }
             }
 
-            Ok(None)
+            None
         },
-        Err(err) => {
-            Err(DownloadError::HttpRequestError(err))
-        }
+        Err(err) => None
     }
 }
