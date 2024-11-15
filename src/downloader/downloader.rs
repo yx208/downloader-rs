@@ -148,6 +148,18 @@ impl FileDownloader {
     fn is_downloading(&self) -> bool {
         self.downloading_state.read().is_some()
     }
+
+    fn cancel(&self) {
+
+    }
+
+    fn pause(&self) {
+
+    }
+
+    fn resume(&self) {
+
+    }
 }
 
 mod tests {
