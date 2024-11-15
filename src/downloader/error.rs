@@ -18,5 +18,4 @@ pub enum DownloadError {
 pub enum DownloadEndCause {
     Finished,
     Canceled,
-    Paused
 }

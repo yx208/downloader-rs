@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 mod downloader;
 
 #[tokio::main]

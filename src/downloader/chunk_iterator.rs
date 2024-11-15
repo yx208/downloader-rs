@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use crate::downloader::chunk_info::ChunkInfo;
 use crate::downloader::chunk_range::ChunkRange;
 
 /// 迭代器不断从这里取出 chunk 进行下载
@@ -46,7 +47,24 @@ impl RemainingChunks {
 
 /// 存储 chunk 状态
 pub struct ChunkIteratorState {
+    // 计数产生了多少个 chunk
+    pub iter_count: usize,
     pub remaining: RemainingChunks
+}
+
+impl ChunkIteratorState {
+    pub fn next_chunk_range(&mut self) -> Option<ChunkInfo> {
+        let range = self.remaining.take_range();
+        if let Some(range) = range {
+            self.iter_count += 1;
+            Some(ChunkInfo {
+                index: self.iter_count,
+                range
+            })
+        } else {
+            None
+        }
+    }
 }
 
 pub struct ChunkIterator {
@@ -62,10 +80,10 @@ impl ChunkIterator {
 }
 
 impl Iterator for ChunkIterator {
-    type Item = ChunkRange;
+    type Item = ChunkInfo;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.data.remaining.take_range()
+        self.data.next_chunk_range()
     }
 }
 
@@ -104,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn should_be_run() {
         let remaining= RemainingChunks::new(NonZeroUsize::new(1).unwrap(), 0);
-        let state = ChunkIteratorState { remaining };
+        let state = ChunkIteratorState { iter_count: 0, remaining };
         let iter = ChunkIterator::new(state);
     }
 }

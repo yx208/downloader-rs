@@ -5,20 +5,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::Result;
 use futures_util::StreamExt;
 use headers::HeaderMapExt;
-use parking_lot::RwLock;
 use reqwest::{Client, Request};
 use tokio::fs::File;
+use tokio::sync::Mutex;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::downloader::chunk_info::ChunkInfo;
 use crate::downloader::chunk_manager::ChunkManger;
-use crate::downloader::error::DownloadError;
+use crate::downloader::error::{DownloadEndCause, DownloadError};
 
 pub struct ChunkItem {
+    pub chunk_info: ChunkInfo,
     client: Client,
-    chunk_info: ChunkInfo,
-    file: Arc<RwLock<File>>,
+    file: Arc<Mutex<File>>,
     downloaded: AtomicU64,
     cancel_token: CancellationToken
 }
@@ -27,7 +27,7 @@ impl ChunkItem {
     pub fn new(
         client: Client,
         chunk_info: ChunkInfo,
-        file: Arc<RwLock<File>>,
+        file: Arc<Mutex<File>>,
         cancel_token: CancellationToken,
     ) -> Self {
         Self {
@@ -39,18 +39,24 @@ impl ChunkItem {
         }
     }
 
-    pub async fn download(&self, request: Request, max_retry_count: u8) -> Result<()> {
+    pub async fn download(&self, request: Request, max_retry_count: u8) -> Result<DownloadEndCause, DownloadError> {
         let future = self.execute_download(request, max_retry_count);
 
         tokio::select! {
             res = future => {
-                let bytes = res?;
-                self.write_bytes_to_file(bytes.as_ref()).await?;
-                Ok(())
+                match res {
+                    Ok(bytes) => {
+                        self.write_bytes_to_file(bytes.as_ref()).await?;
+                        Ok(DownloadEndCause::Finished)
+                    }
+                    Err(err) => {
+                        Err(err)
+                    }
+                }
             }
             _ = self.cancel_token.cancelled() => {
                 println!("Cancelled");
-                Ok(())
+                Ok(DownloadEndCause::Canceled)
             }
         }
     }
@@ -111,7 +117,7 @@ impl ChunkItem {
     }
 
     async fn write_bytes_to_file<'a>(&'a self, bytes: &'a [u8]) -> Result<(), DownloadError> {
-        let mut file = self.file.write();
+        let mut file = self.file.lock().await;
         file.seek(SeekFrom::Start(self.chunk_info.range.start)).await?;
         file.write_all(bytes.as_ref()).await?;
         file.flush().await?;
@@ -140,7 +146,7 @@ mod tests {
 
         let chunk_range = ChunkRange::new(0, 1024 * 1024 *4);
         let chunk_info = ChunkInfo { index: 0, range: chunk_range };
-        let item = ChunkItem::new(client, chunk_info, Arc::new(RwLock::new(file)), token.clone());
+        let item = ChunkItem::new(client, chunk_info, Arc::new(Mutex::new(file)), token.clone());
 
         let file_url = "http://localhost:23333/image.jpg";
         let mut request = Request::new(reqwest::Method::GET, Url::parse(file_url).unwrap());
