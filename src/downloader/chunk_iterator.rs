@@ -187,3 +187,37 @@ impl<'a> RangeBounds<u64> for &'a ChunkRange {
         Bound::Included(&self.end)
     }
 }
+
+mod tests {
+    use std::num::NonZeroUsize;
+    use crate::downloader::chunk_iterator::{ChunkData, ChunkInfo, ChunkIterator, ChunkRange, RemainingChunks};
+
+    #[tokio::test]
+    async fn test_remaining_chunks() {
+        let chunk_size = NonZeroUsize::new(1024 * 1024 * 4).unwrap();
+        let content_length = 40_593_263;
+        let mut remaining_chunks = RemainingChunks::new(chunk_size, content_length);
+
+        let chunk = remaining_chunks.take_first();
+        println!("{:?}", remaining_chunks);
+
+        match chunk {
+            None => {}
+            Some(chunk) => {
+                println!("{:?}", chunk);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_range() {
+        let chunk_size: u64 = 1024 * 1024 * 4;
+        let content_length = 40_593_263;
+        let chunk_data = ChunkData {
+            iter_count: 0,
+            remaining: RemainingChunks::new(NonZeroUsize::new(chunk_size as usize).unwrap(), content_length),
+            last_incomplete_chunks: Vec::new()
+        };
+        let iter = ChunkIterator::new(chunk_size, chunk_data);
+    }
+}

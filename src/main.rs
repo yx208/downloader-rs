@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::path::PathBuf;
 use std::sync::Arc;
