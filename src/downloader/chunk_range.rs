@@ -17,11 +17,18 @@ impl ChunkRange {
     }
 
     pub fn len(&self) -> u64 {
-        self.end - self.start + 1
+        (self.end - self.start) + 1
     }
 
     pub fn to_range_header(&self) -> headers::Range {
         headers::Range::bytes(self).unwrap()
+    }
+    
+    pub fn clone_with_offset(&self, offset: u64) -> ChunkRange {
+        ChunkRange {
+            start: self.start + offset,
+            end: self.end
+        }
     }
 }
 

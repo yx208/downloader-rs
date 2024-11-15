@@ -13,13 +13,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::downloader::chunk_info::ChunkInfo;
 use crate::downloader::chunk_manager::ChunkManger;
+use crate::downloader::chunk_range::ChunkRange;
 use crate::downloader::error::{DownloadEndCause, DownloadError};
 
 pub struct ChunkItem {
     pub chunk_info: ChunkInfo,
+    pub downloaded: AtomicU64,
     client: Client,
     file: Arc<Mutex<File>>,
-    downloaded: AtomicU64,
     cancel_token: CancellationToken
 }
 
@@ -41,7 +42,6 @@ impl ChunkItem {
 
     pub async fn download(&self, request: Request, max_retry_count: u8) -> Result<DownloadEndCause, DownloadError> {
         let future = self.execute_download(request, max_retry_count);
-
         tokio::select! {
             res = future => {
                 match res {
@@ -61,11 +61,17 @@ impl ChunkItem {
         }
     }
 
-    async fn execute_download(&self, request: Request, max_retry_count: u8) -> Result<Vec<u8>, DownloadError> {
+    async fn execute_download(&self, mut request: Request, max_retry_count: u8) -> Result<Vec<u8>, DownloadError> {
         let mut retry_count = 0;
         let mut chunk_bytes = Vec::with_capacity(self.chunk_info.range.len() as usize);
 
         'r: loop {
+            request.headers_mut().typed_insert(
+                ChunkRange::new(
+                    self.chunk_info.range.start + chunk_bytes.len() as u64,
+                    self.chunk_info.range.end
+                ).to_range_header()
+            );
             let response = match self.client.execute(ChunkManger::clone_request(&request)).await {
                 Ok(response) => {
                     retry_count = 0;

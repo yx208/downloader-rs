@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use crate::downloader::chunk_info::ChunkInfo;
 use crate::downloader::chunk_range::ChunkRange;
 
@@ -28,7 +29,6 @@ impl RemainingChunks {
                     }
                     // 最后一个 chunk
                     len if len <= chunk_size => {
-
                         self.ranges.remove(0);
                         len
                     }
@@ -46,13 +46,13 @@ impl RemainingChunks {
 }
 
 /// 存储 chunk 状态
-pub struct ChunkIteratorState {
+pub struct ChunkIteratorData {
     // 计数产生了多少个 chunk
     pub iter_count: usize,
     pub remaining: RemainingChunks
 }
 
-impl ChunkIteratorState {
+impl ChunkIteratorData {
     pub fn next_chunk_range(&mut self) -> Option<ChunkInfo> {
         let range = self.remaining.take_range();
         if let Some(range) = range {
@@ -68,22 +68,19 @@ impl ChunkIteratorState {
 }
 
 pub struct ChunkIterator {
-    pub data: ChunkIteratorState,
+    pub data: Arc<parking_lot::RwLock<ChunkIteratorData>>,
 }
 
 impl ChunkIterator {
-    pub fn new(data: ChunkIteratorState) -> Self {
+    pub fn new(data: ChunkIteratorData) -> Self {
         Self {
-            data
+            data: Arc::new(parking_lot::RwLock::new(data))
         }
     }
-}
 
-impl Iterator for ChunkIterator {
-    type Item = ChunkInfo;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.data.next_chunk_range()
+    pub fn next(&self) -> Option<ChunkInfo> {
+        let mut data = self.data.write();
+        data.next_chunk_range()
     }
 }
 
@@ -122,7 +119,7 @@ mod tests {
     #[tokio::test]
     async fn should_be_run() {
         let remaining= RemainingChunks::new(NonZeroUsize::new(1).unwrap(), 0);
-        let state = ChunkIteratorState { iter_count: 0, remaining };
+        let state = ChunkIteratorData { iter_count: 0, remaining };
         let iter = ChunkIterator::new(state);
     }
 }
