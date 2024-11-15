@@ -1,0 +1,22 @@
+[package]
+name = "downloader-rs"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = "z"
+
+[dependencies]
+anyhow = "1.0.93"
+async-stream = "0.3.6"
+bson = "2.13.0"
+bytes = "1.8.0"
+futures-util = "0.3.31"
+headers = "0.4.0"
+parking_lot = "0.12.3"
+reqwest = { version = "0.12.9", features = ["stream"] }
+serde = "1.0.215"
+thiserror = "2.0.3"
+tokio = { version = "1.41.1", features = ["full"] }
+tokio-util = "0.7.12"
+url = "2.5.3"
