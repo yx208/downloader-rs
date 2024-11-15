@@ -6,3 +6,4 @@ mod downloader;
 mod error;
 mod chunk_info;
 mod chunk_range;
+mod util;

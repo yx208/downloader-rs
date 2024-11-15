@@ -1,6 +1,7 @@
 use std::io::SeekFrom;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::Result;
 use futures_util::StreamExt;
 use headers::HeaderMapExt;
@@ -9,6 +10,7 @@ use reqwest::{Client, Request};
 use tokio::fs::File;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
+
 use crate::downloader::chunk_info::ChunkInfo;
 use crate::downloader::chunk_manager::ChunkManger;
 use crate::downloader::error::DownloadError;
