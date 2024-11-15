@@ -1,28 +1,49 @@
-use tokio_util::sync::CancellationToken;
+use std::io::SeekFrom;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::Result;
-use reqwest::{Client, Error, Request, Response};
-use crate::downloader::error::{DownloadEndCause, DownloadError};
+use futures_util::StreamExt;
+use headers::HeaderMapExt;
+use parking_lot::RwLock;
+use reqwest::{Client, Request};
+use tokio::fs::File;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
+use crate::downloader::chunk_info::ChunkInfo;
+use crate::downloader::chunk_manager::ChunkManger;
+use crate::downloader::error::DownloadError;
 
 pub struct ChunkItem {
     client: Client,
+    chunk_info: ChunkInfo,
+    file: Arc<RwLock<File>>,
+    downloaded: AtomicU64,
     cancel_token: CancellationToken
 }
 
 impl ChunkItem {
-    pub fn new(client: Client, cancel_token: CancellationToken) -> Self {
+    pub fn new(
+        client: Client,
+        chunk_info: ChunkInfo,
+        file: Arc<RwLock<File>>,
+        cancel_token: CancellationToken,
+    ) -> Self {
         Self {
+            file,
             client,
-            cancel_token
+            chunk_info,
+            cancel_token,
+            downloaded: AtomicU64::new(0),
         }
     }
 
-    pub async fn download(&self, request: Request) -> Result<()> {
-        let future = self.execute_download(request);
+    pub async fn download(&self, request: Request, max_retry_count: u8) -> Result<()> {
+        let future = self.execute_download(request, max_retry_count);
 
         tokio::select! {
             res = future => {
-                res?;
-
+                let bytes = res?;
+                self.write_bytes_to_file(bytes.as_ref()).await?;
                 Ok(())
             }
             _ = self.cancel_token.cancelled() => {
@@ -32,35 +53,98 @@ impl ChunkItem {
         }
     }
 
-    async fn execute_download(&self, request: Request) -> Result<(), DownloadError> {
-        'r: loop {
-            let response = match self.client.execute(request).await {
-                Ok(_) => {
+    async fn execute_download(&self, request: Request, max_retry_count: u8) -> Result<Vec<u8>, DownloadError> {
+        let mut retry_count = 0;
+        let mut chunk_bytes = Vec::with_capacity(self.chunk_info.range.len() as usize);
 
+        'r: loop {
+            let response = match self.client.execute(ChunkManger::clone_request(&request)).await {
+                Ok(response) => {
+                    retry_count = 0;
+                    response
                 }
                 Err(err) => {
-                    return Err(DownloadError::HttpRequestError(err));
+                    retry_count += 1;
+
+                    if retry_count > max_retry_count {
+                        return Err(DownloadError::HttpRequestError(err));
+                    }
+
+                    continue 'r;
                 }
             };
 
-            return Ok(())
+            let mut stream = response.bytes_stream();
+            while let Some(bytes) = stream.next().await {
+                let bytes = match bytes {
+                    Ok(bytes) => {
+                        bytes
+                    }
+                    Err(err) => {
+                        retry_count += 1;
+
+                        if retry_count > max_retry_count {
+                            self.write_bytes_to_file(chunk_bytes.as_ref()).await?;
+                            return Err(DownloadError::HttpRequestError(err));
+                        }
+
+                        continue 'r;
+                    }
+                };
+
+                let len = bytes.len();
+                chunk_bytes.extend(bytes);
+                self.add_downloaded_len(len as u64);
+                // TODO: 通知上层，当前下载了多大
+            }
+
+            break;
         }
+
+        Ok(chunk_bytes)
+    }
+
+    fn add_downloaded_len(&self, len: u64) {
+        self.downloaded.fetch_add(len, Ordering::Relaxed);
+    }
+
+    async fn write_bytes_to_file<'a>(&'a self, bytes: &'a [u8]) -> Result<(), DownloadError> {
+        let mut file = self.file.write();
+        file.seek(SeekFrom::Start(self.chunk_info.range.start)).await?;
+        file.write_all(bytes.as_ref()).await?;
+        file.flush().await?;
+        file.sync_all().await?;
+
+        Ok(())
     }
 }
 
 mod tests {
-    use url::Url;
+    use tokio::fs::OpenOptions;
     use super::*;
+    use url::Url;
+    use crate::downloader::chunk_range::ChunkRange;
 
     #[tokio::test]
     async fn should_be_run() {
         let token = CancellationToken::new();
         let client = Client::new();
-        let item = ChunkItem::new(client, token.clone());
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open("C:/Users/User/Downloads/test.jpg")
+            .await
+            .unwrap();
 
-        let file_url = "";
-        let request = Request::new(reqwest::Method::GET, Url::parse().unwrap());
+        let chunk_range = ChunkRange::new(0, 1024 * 1024 *4);
+        let chunk_info = ChunkInfo { index: 0, range: chunk_range };
+        let item = ChunkItem::new(client, chunk_info, Arc::new(RwLock::new(file)), token.clone());
 
-        item.download().await.unwrap();
+        let file_url = "http://localhost:23333/image.jpg";
+        let mut request = Request::new(reqwest::Method::GET, Url::parse(file_url).unwrap());
+        let header_map = request.headers_mut();
+        header_map.typed_insert(chunk_range.to_range_header());
+
+        item.download(request, 3).await.unwrap();
     }
 }
