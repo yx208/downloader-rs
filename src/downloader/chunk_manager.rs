@@ -11,6 +11,7 @@ use tokio::sync::{Mutex, RwLock};
 use anyhow::Result;
 use futures_util::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
+
 use crate::downloader::chunk_item::ChunkItem;
 use crate::downloader::chunk_iterator::ChunkIterator;
 use crate::downloader::error::{DownloadEndCause, DownloadError};
@@ -165,14 +166,6 @@ mod tests {
         let file_url = Url::parse("http://localhost:23333/image.jpg")?;
         let file_size = get_file_length(file_url.clone()).await?.unwrap();
         let mut remaining = RemainingChunks::new(NonZeroUsize::new(1024 * 1024 * 4).unwrap(), file_size);
-
-        // println!("FileSize: {}", file_size);
-        // println!("{:?}", remaining.take_range());
-        // println!("{:?}", remaining.take_range());
-        // println!("{:?}", remaining.take_range());
-        // println!("{:?}", remaining.take_range());
-        //
-        // return Ok(());
 
         let chunk_iter = ChunkIterator::new(ChunkIteratorData { iter_count: 0, remaining });
         let mut chunk_manger = ChunkManger::new(
