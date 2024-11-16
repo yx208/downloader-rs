@@ -23,13 +23,13 @@ pub struct DownloadingState {
 }
 
 pub struct DownloaderConfig {
-    chunk_size: NonZeroUsize,
-    url: Url,
-    save_dir: PathBuf,
-    retry_count: u8,
-    file_name: String,
-    connection_count: NonZeroU8,
-    cancel_token: Option<CancellationToken>
+    pub chunk_size: NonZeroUsize,
+    pub url: Url,
+    pub save_dir: PathBuf,
+    pub retry_count: u8,
+    pub file_name: String,
+    pub connection_count: NonZeroU8,
+    pub cancel_token: Option<CancellationToken>
 }
 
 impl DownloaderConfig {
@@ -78,14 +78,14 @@ impl FileDownloader {
             return Err(DownloadStartError::DirectoryDoesNotExist);
         }
 
-        Ok(self.start_download())
-    }
-
-    fn start_download(&mut self) -> impl Future<Output=Result<DownloadEndCause, DownloadError>> {
         if self.cancel_token.is_cancelled() {
             self.cancel_token = CancellationToken::new();
         }
 
+        Ok(self.start_download())
+    }
+
+    fn start_download(&self) -> impl Future<Output=Result<DownloadEndCause, DownloadError>> {
         let client = self.client.clone();
         let file_size = self.file_size;
         let cancel_token = self.cancel_token.clone();
@@ -149,16 +149,8 @@ impl FileDownloader {
         self.downloading_state.read().is_some()
     }
 
-    fn cancel(&self) {
-
-    }
-
-    fn pause(&self) {
-
-    }
-
-    fn resume(&self) {
-
+    pub fn cancel(&self) {
+        self.cancel_token.cancel();
     }
 }
 

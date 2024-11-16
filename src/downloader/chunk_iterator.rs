@@ -115,11 +115,4 @@ mod tests {
 
         assert!(remaining.ranges.is_empty());
     }
-
-    #[tokio::test]
-    async fn should_be_run() {
-        let remaining= RemainingChunks::new(NonZeroUsize::new(1).unwrap(), 0);
-        let state = ChunkIteratorData { iter_count: 0, remaining };
-        let iter = ChunkIterator::new(state);
-    }
 }
