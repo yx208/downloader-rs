@@ -55,7 +55,7 @@ impl ChunkItem {
                 }
             }
             _ = self.cancel_token.cancelled() => {
-                println!("Cancelled");
+                println!("Cancelled chunk item: {}", self.chunk_info.index);
                 Ok(DownloadEndCause::Canceled)
             }
         }

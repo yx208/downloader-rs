@@ -6,4 +6,4 @@ mod chunk_manager;
 mod download_way;
 mod chunk_info;
 mod chunk_range;
-mod util;
+pub mod util;

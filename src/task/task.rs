@@ -61,26 +61,44 @@ pub enum TaskStatus {
 
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
     use url::Url;
+    use crate::downloader::util::get_file_length;
     use crate::task::task::{DownloadTask, TaskOptions};
 
     #[tokio::test]
     async fn should_be_cancel() {
+        let file_url = Url::parse("http://localhost:23333/video.mkv").unwrap();
+        let file_size = get_file_length(file_url.clone())
+            .await
+            .unwrap();
         let options = TaskOptions {
-            url: Url::parse("http://localhost:23333/image.jpg").unwrap(),
-            file_size: 14_674_216,
+            file_size,
+            url: file_url,
             save_dir: PathBuf::from("C:/Users/X/Downloads"),
-            filename: "demo.jpg".to_string(),
+            filename: "demo.mkv".to_string(),
         };
-        let mut download_task = DownloadTask::new(options);
-        match download_task.run().await {
+        let download_task = Arc::new(Mutex::new(DownloadTask::new(options)));
+
+        let download_task_clone = download_task.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            download_task_clone.lock().await.cancel();
+        });
+
+        let result = {
+            let mut task = download_task.lock().await;
+            task.run().await
+        };
+        match result {
             Ok(future) => {
                 match future.await {
                     Ok(result) => {
-                        println!("{:?}", result);
+                        println!("Download end: {:?}", result);
                     }
                     Err(err) => {
-                        println!("{}", err);
+                        println!("Download error: {}", err);
                     }
                 }
             }

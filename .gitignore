@@ -2,3 +2,4 @@
 .idea
 /examples/**/target
 /example/**/node_modules
+/example/file/resource/*
