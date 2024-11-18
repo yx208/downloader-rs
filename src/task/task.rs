@@ -116,6 +116,48 @@ mod tests {
     use crate::downloader::util::get_file_length;
     use crate::task::task::{DownloadTask, TaskOptions};
 
+    async fn create_task() -> DownloadTask {
+        let file_url = Url::parse("https://tasset.xgy.tv/down/resources/agency/CeShiJiGou_1/QianDuanBuMen_2/dc9152119c160a601e5f684795fb4ea2_16/20241118/18154964fcaafce36522519013.mp4").unwrap();
+        let file_size = get_file_length(file_url.clone())
+            .await
+            .unwrap();
+        let options = TaskOptions {
+            file_size,
+            url: file_url,
+            save_dir: PathBuf::from("C:/Users/User/Downloads"),
+            filename: "demo.mkv".to_string(),
+        };
+
+        DownloadTask::new(options)
+    }
+
+    #[tokio::test]
+    async fn should_be_resume() -> anyhow::Result<()> {
+        let download_task = Arc::new(Mutex::new(create_task().await));
+
+        let download_task_clone = download_task.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            download_task_clone.lock().await.cancel();
+        });
+
+        let download_task_clone = download_task.clone();
+        let result = {
+            let mut task = download_task_clone.lock().await;
+            task.run().await
+        };
+
+        let end_cause = result?.await?;
+        match end_cause {
+            DownloadEndCause::Finished => {
+                println!("Finished");
+            }
+            DownloadEndCause::Canceled => {}
+        };
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn should_be_cancel() -> anyhow::Result<()> {
         let file_url = Url::parse("http://localhost:23333/image.png")?;
