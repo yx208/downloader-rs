@@ -142,18 +142,22 @@ mod tests {
         });
 
         let download_task_clone = download_task.clone();
-        let result = {
-            let mut task = download_task_clone.lock().await;
-            task.run().await
+        let run = async move {
+            let result = {
+                let mut task = download_task_clone.lock().await;
+                task.run().await
+            };
+
+            let end_cause = result?.await?;
+            match end_cause {
+                DownloadEndCause::Finished => {
+                    println!("Finished");
+                }
+                DownloadEndCause::Canceled => {}
+            };
         };
 
-        let end_cause = result?.await?;
-        match end_cause {
-            DownloadEndCause::Finished => {
-                println!("Finished");
-            }
-            DownloadEndCause::Canceled => {}
-        };
+        run.await;
 
         Ok(())
     }
