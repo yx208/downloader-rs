@@ -25,10 +25,10 @@ enum DownloadFutureResult {
 pub struct ChunkManger {
     connection_count: u8,
     retry_count: u8,
-    chunk_iter: ChunkIterator,
     client: Client,
     cancel_token: CancellationToken,
-    downloading_chunks: RwLock<HashMap<usize, Arc<ChunkItem>>>
+    pub chunk_iter: ChunkIterator,
+    pub downloading_chunks: RwLock<HashMap<usize, Arc<ChunkItem>>>
 }
 
 impl ChunkManger {
@@ -56,6 +56,21 @@ impl ChunkManger {
         *req.timeout_mut() = request.timeout().map(Clone::clone);
 
         req
+    }
+
+    pub async fn get_downloading_chunks(&self) -> Vec<Arc<ChunkItem>> {
+        let mut downloading_chunks: Vec<_> = self
+            .downloading_chunks
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        downloading_chunks.sort_by(|a, b| {
+            a.chunk_info.range.start.cmp(&b.chunk_info.range.start)
+        });
+
+        downloading_chunks
     }
 
     pub async fn start_download(&self, file: File, request: Request) -> Result<DownloadEndCause, DownloadError> {

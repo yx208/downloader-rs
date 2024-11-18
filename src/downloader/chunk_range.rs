@@ -1,7 +1,8 @@
 use std::collections::Bound;
 use std::ops::RangeBounds;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct ChunkRange {
     pub start: u64,
     pub end: u64,

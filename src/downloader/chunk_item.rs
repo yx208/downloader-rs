@@ -16,6 +16,7 @@ use crate::downloader::chunk_manager::ChunkManger;
 use crate::downloader::chunk_range::ChunkRange;
 use crate::downloader::error::{DownloadEndCause, DownloadError};
 
+#[derive(Debug)]
 pub struct ChunkItem {
     pub chunk_info: ChunkInfo,
     pub downloaded: AtomicU64,

@@ -11,7 +11,6 @@ use headers::HeaderMapExt;
 use parking_lot::RwLock;
 use tokio::io::AsyncSeekExt;
 use tokio::time::Instant;
-
 use crate::downloader::chunk_iterator::{ChunkIterator, ChunkIteratorData, RemainingChunks};
 use crate::downloader::chunk_manager::ChunkManger;
 use crate::downloader::download_way::{DownloadSingle, DownloadWay};
@@ -19,7 +18,7 @@ use crate::downloader::error::{DownloadEndCause, DownloadError, DownloadStartErr
 
 pub struct DownloadingState {
     pub download_instant: Instant,
-    download_way: DownloadWay,
+    pub download_way: DownloadWay,
 }
 
 pub struct DownloaderConfig {
@@ -52,8 +51,8 @@ pub struct FileDownloader {
     config: Arc<DownloaderConfig>,
     cancel_token: CancellationToken,
     client: Client,
-    file_size: u64,
-    downloading_state: Arc<RwLock<Option<Arc<DownloadingState>>>>,
+    pub file_size: u64,
+    pub downloading_state: Arc<RwLock<Option<Arc<DownloadingState>>>>,
 }
 
 impl FileDownloader {

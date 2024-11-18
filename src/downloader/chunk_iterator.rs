@@ -1,9 +1,11 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 use crate::downloader::chunk_info::ChunkInfo;
 use crate::downloader::chunk_range::ChunkRange;
 
 /// 迭代器不断从这里取出 chunk 进行下载
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemainingChunks {
     chunk_size: usize,
     ranges: Vec<ChunkRange>
@@ -46,6 +48,7 @@ impl RemainingChunks {
 }
 
 /// 存储 chunk 状态
+#[derive(Debug, Clone)]
 pub struct ChunkIteratorData {
     // 计数产生了多少个 chunk
     pub iter_count: usize,
@@ -53,6 +56,16 @@ pub struct ChunkIteratorData {
 }
 
 impl ChunkIteratorData {
+    /// 计算仍需下载多少
+    pub fn remaining_len(&self) -> u64 {
+        let mut len = 0;
+        for item in &self.remaining.ranges {
+            len += item.len();
+        }
+
+        len
+    }
+
     pub fn next_chunk_range(&mut self) -> Option<ChunkInfo> {
         let range = self.remaining.take_range();
         if let Some(range) = range {

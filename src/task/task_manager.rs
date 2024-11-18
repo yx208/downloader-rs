@@ -23,6 +23,11 @@ impl TaskManager {
 
     }
 
+    pub fn cancel(&self, task_id: Uuid) {
+
+    }
+
+    // 暂停是停止任务，并把状态写入到配置文件
     pub fn pause(&self, task_id: Uuid) {
 
     }
@@ -34,6 +39,10 @@ impl TaskManager {
     pub fn add_task(&mut self, task: DownloadTask) -> Uuid {
         self.tasks.push(task);
         Uuid::new_v4()
+    }
+
+    pub fn save(&self) {
+
     }
 }
 
