@@ -8,3 +8,7 @@ pub struct DownloadArchiveData {
     pub remaining_chunks: RemainingChunks,
     pub last_incomplete_chunks: Vec<ChunkInfo>
 }
+
+pub struct Archive {
+
+}

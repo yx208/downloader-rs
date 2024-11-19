@@ -50,8 +50,8 @@ impl DownloadTask {
         self.downloader.download()
     }
 
-    pub fn cancel(&self) {
-        self.downloader.cancel();
+    pub async fn cancel(&self) {
+        self.downloader.cancel().await;
     }
 
     pub async fn archive(&self) -> Option<DownloadArchiveData> {
@@ -138,7 +138,7 @@ mod tests {
         let download_task_clone = download_task.clone();
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            download_task_clone.lock().await.cancel();
+            download_task_clone.lock().await.cancel().await;
         });
 
         let download_task_clone = download_task.clone();

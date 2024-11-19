@@ -73,7 +73,7 @@ impl ChunkManger {
         downloading_chunks
     }
 
-    pub async fn start_download(&self, file: File, request: Request) -> Result<DownloadEndCause, DownloadError> {
+    pub async fn download(&self, file: File, request: Request) -> Result<DownloadEndCause, DownloadError> {
         let mut future_unordered = FuturesUnordered::new();
         let file = Arc::new(Mutex::new(file));
 
@@ -197,7 +197,7 @@ mod tests {
             .open("C:/Users/X/Downloads/demo.jpg")
             .await?;
         let request = Request::new(reqwest::Method::GET, file_url);
-        chunk_manger.start_download(file, request).await?;
+        chunk_manger.download(file, request).await?;
 
         Ok(())
     }

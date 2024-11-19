@@ -136,7 +136,7 @@ impl FileDownloader {
                     Result::<DownloadEndCause, DownloadError>::Ok(DownloadEndCause::Finished)
                 }
                 DownloadWay::Range(chunk_manager) => {
-                    chunk_manager.start_download(file, config.create_http_request()).await
+                    chunk_manager.download(file, config.create_http_request()).await
                 }
             };
 
