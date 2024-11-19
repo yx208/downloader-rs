@@ -10,15 +10,9 @@ use tokio::fs::File;
 use tokio::sync::Mutex;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::select;
-use crate::download::chunk_range::ChunkRange;
+use crate::download::chunk_range::{ChunkInfo, ChunkRange};
 use crate::download::error::{DownloadEndCause, DownloadError};
 use crate::download::util::clone_request;
-
-#[derive(Debug, Clone)]
-pub struct ChunkInfo {
-    index: usize,
-    range: ChunkRange,
-}
 
 pub struct ChunkItem {
     client: Client,
@@ -116,9 +110,9 @@ mod tests {
     use dirs;
     use url::Url;
 
-    async fn create_file() -> File {
+    async fn create_file(filename: &str) -> File {
         let mut download_dir = dirs::download_dir().unwrap();
-        download_dir.push("demo.jpg");
+        download_dir.push(filename);
         let file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -129,9 +123,9 @@ mod tests {
         file
     }
 
-    async fn create_chunk_item() -> ChunkItem {
+    async fn create_chunk_item(filename: &str) -> ChunkItem {
         let chunk_info = ChunkInfo { index: 0, range: ChunkRange::new(0, 1024 * 1024 * 4) };
-        let file = create_file().await;
+        let file = create_file(filename).await;
         let file = Arc::new(Mutex::new(file));
         let client = Client::new();
         let chunk_item = ChunkItem::new(chunk_info, file, client, 3);
@@ -141,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_be_download() {
-        let chunk_item = create_chunk_item().await;
+        let chunk_item = create_chunk_item("demo.jpg").await;
         let url = Url::parse("http://localhost:23333/image.jpg").unwrap();
         let request = Request::new(reqwest::Method::GET, url);
 

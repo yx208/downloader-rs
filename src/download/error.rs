@@ -18,3 +18,15 @@ pub enum DownloadEndCause {
     Cancelled,
     Paused,
 }
+
+#[derive(Error, Debug)]
+pub enum DownloadStartError {
+    #[error("Open file failed: {:?}", .0)]
+    OpenFileFailed(#[from] io::Error),
+
+    #[error("Already downloading")]
+    AlreadyDownloading,
+
+    #[error("Directory does not exist")]
+    DirectoryDoesNotExist,
+}

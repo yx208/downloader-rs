@@ -1,6 +1,7 @@
 #![allow(warnings)]
 
 mod download;
+mod task;
 
 #[tokio::main]
 async fn main() {
