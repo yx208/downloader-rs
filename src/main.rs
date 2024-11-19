@@ -1,10 +1,8 @@
 #![allow(warnings)]
 
-mod downloader;
-mod task;
-mod extension;
+mod download;
 
 #[tokio::main]
 async fn main() {
-
+    println!("Hello, world!");
 }
