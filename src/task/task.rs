@@ -125,7 +125,7 @@ mod tests {
             file_size,
             url: file_url,
             save_dir: PathBuf::from("C:/Users/User/Downloads"),
-            filename: "demo.mkv".to_string(),
+            filename: "demo.mp4".to_string(),
         };
 
         DownloadTask::new(options)
@@ -148,7 +148,25 @@ mod tests {
                 task.run().await
             };
 
-            let end_cause = result?.await?;
+            let end_cause = result.unwrap().await.unwrap();
+            match end_cause {
+                DownloadEndCause::Finished => {
+                    println!("Finished");
+                }
+                DownloadEndCause::Canceled => {}
+            };
+        };
+
+        run.await;
+
+        let download_task_clone = download_task.clone();
+        let run = async move {
+            let result = {
+                let mut task = download_task_clone.lock().await;
+                task.run().await
+            };
+
+            let end_cause = result.unwrap().await.unwrap();
             match end_cause {
                 DownloadEndCause::Finished => {
                     println!("Finished");
