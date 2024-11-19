@@ -160,8 +160,16 @@ impl FileDownloader {
         self.downloading_state.read().is_some()
     }
 
-    pub fn cancel(&self) {
-        self.cancel_token.cancel();
+    pub fn cancel(&self) -> impl Future<Output=()> {
+        let downloading_state = self.downloading_state.clone();
+        let token = self.cancel_token.clone();
+        async move {
+            {
+                let mut state_guard = downloading_state.write();
+                state_guard.take();
+            }
+            token.cancel();
+        }
     }
 }
 
