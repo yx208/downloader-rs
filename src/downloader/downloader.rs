@@ -7,6 +7,7 @@ use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use anyhow::Result;
+use futures_util::TryFutureExt;
 use headers::HeaderMapExt;
 use parking_lot::RwLock;
 use tokio::io::AsyncSeekExt;
@@ -31,6 +32,13 @@ pub struct DownloaderConfig {
     pub cancel_token: Option<CancellationToken>
 }
 
+enum DownloadActionState {
+    Pending,
+    Running,
+    Paused,
+    Cancelled
+}
+
 impl DownloaderConfig {
     pub fn file_path(&self) -> PathBuf {
         self.save_dir.join(&self.file_name)
@@ -51,6 +59,7 @@ pub struct FileDownloader {
     config: Arc<DownloaderConfig>,
     cancel_token: CancellationToken,
     client: Client,
+    action_state: DownloadActionState,
     pub file_size: u64,
     pub downloading_state: Arc<RwLock<Option<Arc<DownloadingState>>>>,
 }
@@ -62,6 +71,7 @@ impl FileDownloader {
         Self {
             cancel_token,
             file_size,
+            action_state: DownloadActionState::Pending,
             config: Arc::new(config),
             client: Client::new(),
             downloading_state: Arc::new(RwLock::new(None))
@@ -81,6 +91,7 @@ impl FileDownloader {
             self.cancel_token = CancellationToken::new();
         }
 
+        self.action_state = DownloadActionState::Running;
         Ok(self.start_download())
     }
 
@@ -92,8 +103,9 @@ impl FileDownloader {
         let downloading_state = self.downloading_state.clone();
 
         async move {
+            // 获取下载方式
             let download_way = if file_size <= 1024 * 1024 * 10 {
-                DownloadWay::Single(DownloadSingle {})
+                DownloadWay::Single(DownloadSingle::new(cancel_token, file_size))
             } else {
                 let chunk_data = ChunkIteratorData {
                     iter_count: 0,
@@ -110,9 +122,11 @@ impl FileDownloader {
                 DownloadWay::Range(chunk_manager)
             };
 
-            let state = Arc::new(
-                DownloadingState { download_instant: Instant::now(), download_way }
-            );
+            // 构建下载方式结构
+            let state = Arc::new(DownloadingState {
+                download_instant: Instant::now(),
+                download_way
+            });
             {
                 let mut state_guard = downloading_state.write();
                 *state_guard = Some(state.clone());
@@ -125,18 +139,17 @@ impl FileDownloader {
                     .open(config.file_path())
                     .await
                     .map_err(|err| DownloadError::IOError(err))?;
-                // 预设文件大小
-                // ...
+                file.set_len(self.file_size).await?;
                 file.seek(SeekFrom::Start(0)).await.map_err(|err| DownloadError::IOError(err))?;
                 file
             };
 
             let res = match &state.download_way {
-                DownloadWay::Single(_single_way) => {
-                    Result::<DownloadEndCause, DownloadError>::Ok(DownloadEndCause::Finished)
+                DownloadWay::Single(single_way) => {
+                    single_way.download(file, config.create_http_request(), config.chunk_size.get()).await
                 }
                 DownloadWay::Range(chunk_manager) => {
-                    chunk_manager.start_download(file, config.create_http_request()).await
+                    chunk_manager.download(file, config.create_http_request()).await
                 }
             };
 
