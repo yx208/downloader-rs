@@ -91,11 +91,10 @@ impl FileDownloader {
             self.cancel_token = CancellationToken::new();
         }
 
-        self.action_state = DownloadActionState::Running;
-        Ok(self.start_download())
+        Ok(self.run_download())
     }
 
-    fn start_download(&self) -> impl Future<Output=Result<DownloadEndCause, DownloadError>> {
+    fn run_download(&self) -> impl Future<Output=Result<DownloadEndCause, DownloadError>> {
         let client = self.client.clone();
         let file_size = self.file_size;
         let cancel_token = self.cancel_token.clone();
