@@ -2,7 +2,7 @@ use std::io::SeekFrom;
 use std::ops::Deref;
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicU64, Ordering};
-use reqwest::{Client, Error, Request, Response, StatusCode};
+use reqwest::{Client, Request, Response, StatusCode};
 use anyhow::Result;
 use futures_util::StreamExt;
 use headers::HeaderMapExt;
@@ -74,8 +74,8 @@ impl ChunkItem {
                 Ok(DownloadEndCause::Finished)
             }
             _ = action_receiver.changed() => {
-                let action = action_receiver.borrow_and_update();
-                match action.deref() {
+                let action = action_receiver.borrow_and_update().clone();
+                match action {
                     DownloadActionNotify::Error => {
                         Err(DownloadError::ExceptionDuringDownload)
                     }
@@ -92,7 +92,7 @@ impl ChunkItem {
         'a: loop {
             let response = match self.client.execute(clone_request(request)).await {
                 Ok(response) => {
-                    if response.status() == StatusCode::OK {
+                    if response.status() == StatusCode::OK || response.status() == StatusCode::PARTIAL_CONTENT {
                         response
                     } else {
                         return Err(DownloadError::ExceptionDuringDownload);

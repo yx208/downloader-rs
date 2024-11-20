@@ -15,9 +15,9 @@ impl TaskManager {
 
     }
 
-    pub fn run_all(&self) {
+    pub fn run_all(&mut self) {
         let mut futures = Vec::new();
-        for downloader in &self.tasks {
+        for downloader in self.tasks.iter_mut() {
             let future = downloader.download();
             futures.push(future);
         }

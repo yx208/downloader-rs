@@ -47,16 +47,18 @@ impl ChunkManager {
 
     pub async fn download(
         &self,
-        file: Arc<Mutex<File>>,
+        file: File,
         request: Request,
+        retry_count: u8,
         action_receiver: watch::Receiver<DownloadActionNotify>,
         action_sender: watch::Sender<DownloadActionNotify>,
     ) -> DownloadResultType {
         let mut futures_unordered = FuturesUnordered::new();
         let mut is_download_finished = false;
+        let file = Arc::new(Mutex::new(file));
 
         let download_next_chunk  = || async {
-            self.download_next_chunk(file.clone(), clone_request(&request), action_receiver.clone()).await
+            self.download_next_chunk(file.clone(), retry_count, clone_request(&request), action_receiver.clone()).await
         };
 
         // 下载连接数的 chunk
@@ -115,6 +117,7 @@ impl ChunkManager {
     async fn download_next_chunk(
         &self,
         file: Arc<Mutex<File>>,
+        retry_count: u8,
         request: Request,
         action_receiver: watch::Receiver<DownloadActionNotify>
     ) -> Option<BoxFuture<(usize, DownloadResultType)>> {
@@ -123,7 +126,7 @@ impl ChunkManager {
                 chunk_info,
                 file,
                 self.client.clone(),
-                3
+                retry_count
             ));
             self.insert_downloading_chunk(chunk_item.clone()).await;
 
@@ -175,14 +178,15 @@ mod tests {
     async fn should_be_download() {
         let url = Url::parse("http://localhost:23333/image.jpg").unwrap();
         let chunk_manager = create_manager(url.clone()).await;
-        let file = Arc::new(Mutex::new(create_file().await));
+        let file = create_file().await;
         let (tx, rx) = watch::channel(
             DownloadActionNotify::Notify(DownloadEndCause::Finished)
         );
 
         let result = chunk_manager.download(
-            file.clone(),
+            file,
             Request::new(reqwest::Method::GET, url.clone()),
+            3,
             rx.clone(),
             tx.clone()
         );
