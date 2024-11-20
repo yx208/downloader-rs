@@ -18,14 +18,23 @@ pub struct ChunkManager {
     chunk_iter: ChunkRangeIterator,
     client: Client,
     connection_count: u8,
-    downloading_chunks: RwLock<HashMap<usize, Arc<ChunkItem>>>
+    downloading_chunks: RwLock<HashMap<usize, Arc<ChunkItem>>>,
+    action_receiver: watch::Receiver<DownloadActionNotify>,
+    action_sender: watch::Sender<DownloadActionNotify>,
 }
 
 impl ChunkManager {
-    pub fn new(connection_count: u8, chunk_iter: ChunkRangeIterator) -> Self {
+    pub fn new(
+        connection_count: u8,
+        chunk_iter: ChunkRangeIterator,
+        action_sender: watch::Sender<DownloadActionNotify>,
+        action_receiver: watch::Receiver<DownloadActionNotify>,
+    ) -> Self {
         Self {
             chunk_iter,
             connection_count,
+            action_receiver,
+            action_sender,
             client: Client::new(),
             downloading_chunks: RwLock::new(HashMap::new())
         }
@@ -45,20 +54,28 @@ impl ChunkManager {
         guard.len()
     }
 
+    fn downloaded_length(&self) {
+
+    }
+
     pub async fn download(
         &self,
         file: File,
         request: Request,
         retry_count: u8,
-        action_receiver: watch::Receiver<DownloadActionNotify>,
-        action_sender: watch::Sender<DownloadActionNotify>,
+        downloaded_len_sender: watch::Sender<u64>,
     ) -> DownloadResultType {
         let mut futures_unordered = FuturesUnordered::new();
         let mut is_download_finished = false;
         let file = Arc::new(Mutex::new(file));
 
         let download_next_chunk  = || async {
-            self.download_next_chunk(file.clone(), retry_count, clone_request(&request), action_receiver.clone()).await
+            self.download_next_chunk(
+                file.clone(),
+                retry_count,
+                clone_request(&request),
+                downloaded_len_sender.clone()
+            ).await
         };
 
         // 下载连接数的 chunk
@@ -102,7 +119,7 @@ impl ChunkManager {
                 }
                 // 发生错误时通通知其他 chunk 停止下载
                 Err(err) => {
-                    match action_sender.send(DownloadActionNotify::Error) {
+                    match self.action_sender.send(DownloadActionNotify::Error) {
                         Ok(_) => {}
                         Err(_) => {}
                     };
@@ -119,7 +136,7 @@ impl ChunkManager {
         file: Arc<Mutex<File>>,
         retry_count: u8,
         request: Request,
-        action_receiver: watch::Receiver<DownloadActionNotify>
+        downloaded_len_sender: watch::Sender<u64>
     ) -> Option<BoxFuture<(usize, DownloadResultType)>> {
         if let Some(chunk_info) = self.chunk_iter.next() {
             let chunk_item = Arc::new(ChunkItem::new(
@@ -131,8 +148,12 @@ impl ChunkManager {
             self.insert_downloading_chunk(chunk_item.clone()).await;
 
             let future = async move {
-                let res = chunk_item.download(request, action_receiver).await;
-                (chunk_item.chunk_info.index, res)
+                let result = chunk_item.download(
+                    request,
+                    self.action_receiver.clone(),
+                    downloaded_len_sender
+                ).await;
+                (chunk_item.chunk_info.index, result)
             };
 
             Some(future.boxed())
@@ -156,7 +177,10 @@ mod tests {
         let chunk_size = NonZeroUsize::new(1024 * 1024 * 4).unwrap();
         let chunk_data = ChunkData::new(chunk_size, content_length);
         let chunk_iter = ChunkRangeIterator::new(chunk_data);
-        let chunk_manager = ChunkManager::new(3, chunk_iter);
+        let (tx, rx) = watch::channel(
+            DownloadActionNotify::Notify(DownloadEndCause::Finished)
+        );
+        let chunk_manager = ChunkManager::new(3, chunk_iter, tx, rx);
 
         chunk_manager
     }
@@ -179,16 +203,12 @@ mod tests {
         let url = Url::parse("http://localhost:23333/image.jpg").unwrap();
         let chunk_manager = create_manager(url.clone()).await;
         let file = create_file().await;
-        let (tx, rx) = watch::channel(
-            DownloadActionNotify::Notify(DownloadEndCause::Finished)
-        );
-
+        let (len_tx, _len_rx) = watch::channel::<u64>(0);
         let result = chunk_manager.download(
             file,
             Request::new(reqwest::Method::GET, url.clone()),
             3,
-            rx.clone(),
-            tx.clone()
+            len_tx
         );
 
         match result.await {

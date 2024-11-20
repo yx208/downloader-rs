@@ -24,7 +24,12 @@ pub struct ChunkItem {
 }
 
 impl ChunkItem {
-    pub fn new(chunk_info: ChunkInfo, file: Arc<Mutex<File>>, client: Client, retry_count: u8) -> Self {
+    pub fn new(
+        chunk_info: ChunkInfo,
+        file: Arc<Mutex<File>>,
+        client: Client,
+        retry_count: u8,
+    ) -> Self {
         Self {
             client,
             file,
@@ -34,7 +39,12 @@ impl ChunkItem {
         }
     }
 
-    pub async fn download(&self, mut request: Request, mut action_receiver: watch::Receiver<DownloadActionNotify>) -> Result<DownloadEndCause, DownloadError> {
+    pub async fn download(
+        &self,
+        mut request: Request,
+        mut action_receiver: watch::Receiver<DownloadActionNotify>,
+        mut downloaded_len_sender: watch::Sender<u64>
+    ) -> Result<DownloadEndCause, DownloadError> {
         let mut chunk_bytes = Vec::with_capacity(self.chunk_info.range.len() as usize);
         let future = async {
             let header_map = request.headers_mut();
@@ -55,6 +65,10 @@ impl ChunkItem {
                 };
                 let len = bytes.len();
                 chunk_bytes.extend(&bytes);
+
+                match downloaded_len_sender.send(len as u64) {
+                    _ => {}
+                }
                 self.downloaded.fetch_add(len as u64, Ordering::Relaxed);
             }
 
@@ -150,7 +164,7 @@ mod tests {
         let url = Url::parse("http://localhost:23333/image.jpg").unwrap();
         let request = Request::new(reqwest::Method::GET, url);
 
-        let (tx, rx) = watch::channel(DownloadActionNotify::Error);
-        chunk_item.download(request, rx.clone()).await.unwrap();
+        let (_tx, rx) = watch::channel(DownloadActionNotify::Error);
+        chunk_item.download(request, rx.clone(), Default::default()).await.unwrap();
     }
 }

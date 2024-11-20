@@ -3,10 +3,12 @@ use std::num::{NonZeroU8, NonZeroUsize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use anyhow::Result;
+use futures_util::{Stream, StreamExt};
 use headers::HeaderMapExt;
 use reqwest::Request;
 use tokio::fs::OpenOptions;
 use tokio::sync::{watch};
+use tokio::task::JoinHandle;
 use url::Url;
 use crate::download::chunk_manager::ChunkManager;
 use crate::download::chunk_range::{ChunkData, ChunkRangeIterator};
@@ -49,24 +51,54 @@ impl DownloaderConfig {
 pub struct Downloader {
     config: Arc<DownloaderConfig>,
     chunk_manager: Option<Arc<ChunkManager>>,
+    // 发送接收 pause/cancel 指令
     action_sender: watch::Sender<DownloadActionNotify>,
-    action_receiver: watch::Receiver<DownloadActionNotify>
+    action_receiver: watch::Receiver<DownloadActionNotify>,
+    // 发送接收数据接收长度
+    downloaded_len_sender: watch::Sender<u64>,
+    downloaded_len_receiver: watch::Receiver<u64>,
+
+    listen_len_change_handle: Option<JoinHandle<()>>
 }
 
 impl Downloader {
     pub fn new(config: DownloaderConfig) -> Self {
-        let (tx, rx) = watch::channel(DownloadActionNotify::Notify(DownloadEndCause::Finished));
+        let (
+            action_sender,
+            action_receiver
+        ) = watch::channel(DownloadActionNotify::Notify(DownloadEndCause::Finished));
+        let (
+            downloaded_len_sender,
+            downloaded_len_receiver
+        ) = watch::channel(0);
 
         Self {
-            action_sender: tx,
-            action_receiver: rx,
+            action_sender,
+            action_receiver,
+            downloaded_len_sender,
+            downloaded_len_receiver,
             chunk_manager: None,
+            listen_len_change_handle: None,
             config: Arc::new(config),
         }
     }
 
     fn file_path(&self) -> PathBuf {
         self.config.save_dir.join(&self.config.file_name)
+    }
+
+    pub fn downloaded_len_stream(&self) -> impl Stream<Item=u64> + 'static {
+        let mut receiver = self.downloaded_len_receiver.clone();
+
+        async_stream::stream! {
+            let len = *receiver.borrow();
+            yield len;
+
+            while receiver.changed().await.is_ok() {
+                let len = *receiver.borrow();
+                yield len;
+            }
+        }
     }
 
     pub async fn download(&mut self) -> Result<impl Future<Output=DownloadResult>, DownloadStartError> {
@@ -85,14 +117,18 @@ impl Downloader {
         let content_length = get_file_length(self.config.url.clone()).await.unwrap();
         let chunk_data = ChunkData::new(self.config.chunk_size.clone(), content_length);
         let iter = ChunkRangeIterator::new(chunk_data);
-        let chunk_manager = Arc::new(ChunkManager::new(self.config.connection_count.get(), iter));
-        let sender = self.action_sender.clone();
-        let receiver = self.action_receiver.clone();
+        let chunk_manager = Arc::new(ChunkManager::new(
+            self.config.connection_count.get(),
+            iter,
+            self.action_sender.clone(),
+            self.action_receiver.clone()
+        ));
 
         self.chunk_manager = Some(chunk_manager.clone());
 
         let file_path = self.file_path();
         let config = self.config.clone();
+        let len_sender = self.downloaded_len_sender.clone();
 
         async move {
             let file = OpenOptions::new()
@@ -105,8 +141,7 @@ impl Downloader {
                 file,
                 config.create_http_request(),
                 config.retry_count,
-                receiver,
-                sender
+                len_sender.clone()
             ).await;
 
             result
