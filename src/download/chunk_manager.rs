@@ -149,9 +149,9 @@ mod tests {
     use crate::download::util::get_file_length;
 
     async fn create_manager(url: Url) -> ChunkManager {
-        // let content_length = get_file_length(url).await.unwrap();
+        let content_length = get_file_length(url).await.unwrap();
         let chunk_size = NonZeroUsize::new(1024 * 1024 * 4).unwrap();
-        let chunk_data = ChunkData::new(chunk_size, 1024 * 1024 * 4 * 10);
+        let chunk_data = ChunkData::new(chunk_size, content_length);
         let chunk_iter = ChunkRangeIterator::new(chunk_data);
         let chunk_manager = ChunkManager::new(3, chunk_iter);
 
