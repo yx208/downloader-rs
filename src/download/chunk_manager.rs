@@ -36,6 +36,8 @@ impl ChunkManager {
         guard.insert(chunk_item.chunk_info.index, chunk_item);
     }
 
+    /// 从下载列表中移除 chunk
+    /// 返回正在下载的 chunk 数量
     async fn remove_downloading_chunk(&self, chunk_index: usize) -> usize {
         let mut guard = self.downloading_chunks.write().await;
         guard.remove(&chunk_index);
@@ -72,13 +74,21 @@ impl ChunkManager {
             let downloading_count = self.remove_downloading_chunk(chunk_index).await;
             match result {
                 Ok(DownloadEndCause::Finished) => {
-                    if is_download_finished {
+                    // 没有 NextChunk 并且也没有下载中的 chunk 即可退出 while 循环
+                    if is_download_finished && downloading_count == 0 {
                         break;
                     }
 
                     match download_next_chunk().await {
-                        None => break,
-                        Some(future) => futures_unordered.push(future)
+                        None => {
+                            is_download_finished = true;
+                            if downloading_count == 0 {
+                                break;
+                            }
+                        },
+                        Some(future) => {
+                            futures_unordered.push(future);
+                        }
                     }
                 }
                 Ok(DownloadEndCause::Cancelled) => {
@@ -101,6 +111,7 @@ impl ChunkManager {
         action_receiver: watch::Receiver<DownloadEndCause>
     ) -> Option<BoxFuture<(usize, DownloadResultType)>> {
         if let Some(chunk_info) = self.chunk_iter.next() {
+            println!("Chunk info: {:?}", chunk_info);
             let chunk_item = Arc::new(ChunkItem::new(
                 chunk_info,
                 file,
@@ -122,8 +133,57 @@ impl ChunkManager {
 }
 
 mod tests {
-    #[tokio::test]
-    async fn test_download() {
+    use super::*;
 
+    use std::num::NonZeroUsize;
+    use tokio::fs::OpenOptions;
+    use url::Url;
+    use crate::download::chunk_range::ChunkData;
+    use crate::download::util::get_file_length;
+
+    async fn create_manager(url: Url) -> ChunkManager {
+        let content_length = get_file_length(url).await.unwrap();
+        let chunk_size = NonZeroUsize::new(1024 * 1024 * 4).unwrap();
+        let chunk_data = ChunkData::new(chunk_size, content_length);
+        let chunk_iter = ChunkRangeIterator::new(chunk_data);
+        let chunk_manager = ChunkManager::new(3, chunk_iter);
+
+        chunk_manager
+    }
+
+    async fn create_file() -> File {
+        let mut download_dir = dirs::download_dir().unwrap();
+        download_dir.push("demo.jpg");
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(download_dir)
+            .await
+            .unwrap();
+
+        file
+    }
+
+    #[tokio::test]
+    async fn should_be_download() {
+        let url = Url::parse("http://localhost:23333/image.jpg").unwrap();
+        let chunk_manager = create_manager(url.clone()).await;
+        let file = Arc::new(Mutex::new(create_file().await));
+        let (tx, rx) = watch::channel(DownloadEndCause::Finished);
+
+        let result = chunk_manager.download(
+            file.clone(),
+            Request::new(reqwest::Method::GET, url.clone()),
+            rx.clone(),
+        );
+
+        match result.await {
+            Ok(download_end_cause) => {
+                println!("{:?}", download_end_cause);
+            }
+            Err(err) => {
+                println!("{}", err);
+            }
+        }
     }
 }

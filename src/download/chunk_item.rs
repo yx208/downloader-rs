@@ -33,17 +33,17 @@ impl ChunkItem {
         }
     }
 
-    /// 执行下载 chunk，并进行 n 次重试
-    pub async fn download(&self, request: Request, mut action_receiver: watch::Receiver<DownloadEndCause>) -> Result<DownloadEndCause, DownloadError> {
-        let mut bytes_buffer = Vec::with_capacity(self.chunk_info.range.len() as usize);
+    pub async fn download(&self, mut request: Request, mut action_receiver: watch::Receiver<DownloadEndCause>) -> Result<DownloadEndCause, DownloadError> {
+        let mut chunk_bytes = Vec::with_capacity(self.chunk_info.range.len() as usize);
         let future = async {
-            // 写入 range 头
-            let mut range_request = clone_request(&request);
-            let header_map = range_request.headers_mut();
-            header_map.typed_insert(self.chunk_info.range.clone().to_range_header());
+            let header_map = request.headers_mut();
+            header_map.typed_insert(ChunkRange::new(
+                self.chunk_info.range.start + chunk_bytes.len() as u64,
+                self.chunk_info.range.end
+            ).to_range_header());
 
             // 读取 chunk 数据
-            let response = self.fetch_chunk(&range_request).await?;
+            let response = self.fetch_chunk(&request).await?;
             let mut stream = response.bytes_stream();
             while let Some(bytes) = stream.next().await {
                 let bytes = match bytes {
@@ -53,7 +53,7 @@ impl ChunkItem {
                     }
                 };
                 let len = bytes.len();
-                bytes_buffer.extend(&bytes);
+                chunk_bytes.extend(&bytes);
                 self.downloaded.fetch_add(len as u64, Ordering::Relaxed);
             }
 
@@ -64,9 +64,11 @@ impl ChunkItem {
             result = future => {
                 result?;
 
+                println!("{}", chunk_bytes.len());
+
                 let mut file = self.file.lock().await;
                 file.seek(SeekFrom::Start(self.chunk_info.range.start)).await?;
-                file.write_all(bytes_buffer.as_ref()).await?;
+                file.write_all(chunk_bytes.as_ref()).await?;
                 file.flush().await?;
                 file.sync_all().await?;
 

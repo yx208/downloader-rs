@@ -1,13 +1,15 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
+use anyhow::Result;
 use headers::HeaderMapExt;
 use reqwest::Request;
-use tokio::fs::OpenOptions;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{watch};
 use url::Url;
 use crate::download::chunk_manager::ChunkManager;
 use crate::download::error::{DownloadEndCause, DownloadError, DownloadStartError};
+
+type DownloadResult = Result<DownloadEndCause, DownloadError>;
 
 pub struct DownloaderConfig {
     url: Url,
@@ -53,12 +55,11 @@ impl Downloader {
         }
     }
 
-    pub fn file_path(&self) -> PathBuf {
+    fn file_path(&self) -> PathBuf {
         self.config.save_dir.join(&self.config.file_name)
     }
 
-    pub async fn download(&self)
-        -> Result<impl Future<Output=Result<DownloadEndCause, DownloadError>>, DownloadStartError>
+    pub async fn download(&self) -> Result<DownloadResult, DownloadStartError>
     {
         if self.chunk_manager.is_some() {
             return Err(DownloadStartError::AlreadyDownloading);
@@ -68,10 +69,15 @@ impl Downloader {
            return Err(DownloadStartError::DirectoryDoesNotExist);
         }
 
-        Ok(self.run_download())
+        let res = self.run_download().await;
+
+        Ok(res)
     }
 
-    pub async fn run_download(&self) -> Result<DownloadEndCause, DownloadError> {
+    async fn run_download(&self) -> DownloadResult {
         Ok(DownloadEndCause::Finished)
+        // async move {
+        //     Ok(DownloadEndCause::Finished)
+        // }
     }
 }

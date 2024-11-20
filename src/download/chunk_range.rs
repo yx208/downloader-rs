@@ -1,4 +1,6 @@
+use std::collections::Bound;
 use std::num::NonZeroUsize;
+use std::ops::RangeBounds;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -27,7 +29,17 @@ impl ChunkRange {
     }
     
     pub fn to_range_header(&self) -> headers::Range {
-        headers::Range::bytes(self.start..self.end).unwrap()
+        headers::Range::bytes(self).unwrap()
+    }
+}
+
+impl<'a> RangeBounds<u64> for &'a ChunkRange {
+    fn start_bound(&self) -> Bound<&u64> {
+        Bound::Included(&self.start)
+    }
+
+    fn end_bound(&self) -> Bound<&u64> {
+        Bound::Included(&self.end)
     }
 }
 
