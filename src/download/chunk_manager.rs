@@ -173,7 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_be_download() {
-        let url = Url::parse("http://localhost:23333/imageg.jpg").unwrap();
+        let url = Url::parse("http://localhost:23333/image.jpg").unwrap();
         let chunk_manager = create_manager(url.clone()).await;
         let file = Arc::new(Mutex::new(create_file().await));
         let (tx, rx) = watch::channel(
