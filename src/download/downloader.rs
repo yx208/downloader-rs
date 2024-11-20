@@ -7,7 +7,7 @@ use reqwest::Request;
 use tokio::sync::{watch};
 use url::Url;
 use crate::download::chunk_manager::ChunkManager;
-use crate::download::error::{DownloadEndCause, DownloadError, DownloadStartError};
+use crate::download::error::{DownloadActionNotify, DownloadEndCause, DownloadError, DownloadStartError};
 
 type DownloadResult = Result<DownloadEndCause, DownloadError>;
 
@@ -39,13 +39,13 @@ impl DownloaderConfig {
 pub struct Downloader {
     config: Arc<DownloaderConfig>,
     chunk_manager: Option<ChunkManager>,
-    action_sender: watch::Sender<DownloadEndCause>,
-    action_receiver: watch::Receiver<DownloadEndCause>
+    action_sender: watch::Sender<DownloadActionNotify>,
+    action_receiver: watch::Receiver<DownloadActionNotify>
 }
 
 impl Downloader {
     pub fn new(config: DownloaderConfig) -> Self {
-        let (tx, rx) = watch::channel(DownloadEndCause::Finished);
+        let (tx, rx) = watch::channel(DownloadActionNotify::Notify(DownloadEndCause::Finished));
 
         Self {
             action_sender: tx,

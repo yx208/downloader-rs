@@ -1,7 +1,8 @@
 use std::io::SeekFrom;
+use std::ops::Deref;
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicU64, Ordering};
-use reqwest::{Client, Request, Response};
+use reqwest::{Client, Error, Request, Response, StatusCode};
 use anyhow::Result;
 use futures_util::StreamExt;
 use headers::HeaderMapExt;
@@ -11,7 +12,7 @@ use tokio::sync::Mutex;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::select;
 use crate::download::chunk_range::{ChunkInfo, ChunkRange};
-use crate::download::error::{DownloadEndCause, DownloadError};
+use crate::download::error::{DownloadActionNotify, DownloadEndCause, DownloadError};
 use crate::download::util::clone_request;
 
 pub struct ChunkItem {
@@ -33,7 +34,7 @@ impl ChunkItem {
         }
     }
 
-    pub async fn download(&self, mut request: Request, mut action_receiver: watch::Receiver<DownloadEndCause>) -> Result<DownloadEndCause, DownloadError> {
+    pub async fn download(&self, mut request: Request, mut action_receiver: watch::Receiver<DownloadActionNotify>) -> Result<DownloadEndCause, DownloadError> {
         let mut chunk_bytes = Vec::with_capacity(self.chunk_info.range.len() as usize);
         let future = async {
             let header_map = request.headers_mut();
@@ -64,8 +65,6 @@ impl ChunkItem {
             result = future => {
                 result?;
 
-                println!("{}", chunk_bytes.len());
-
                 let mut file = self.file.lock().await;
                 file.seek(SeekFrom::Start(self.chunk_info.range.start)).await?;
                 file.write_all(chunk_bytes.as_ref()).await?;
@@ -75,8 +74,15 @@ impl ChunkItem {
                 Ok(DownloadEndCause::Finished)
             }
             _ = action_receiver.changed() => {
-                let action = *action_receiver.borrow_and_update();
-                Ok(action)
+                let action = action_receiver.borrow_and_update();
+                match action.deref() {
+                    DownloadActionNotify::Error => {
+                        Err(DownloadError::ExceptionDuringDownload)
+                    }
+                    DownloadActionNotify::Notify(value) => {
+                        Ok(value.clone())
+                    }
+                }
             }
         }
     }
@@ -86,8 +92,11 @@ impl ChunkItem {
         'a: loop {
             let response = match self.client.execute(clone_request(request)).await {
                 Ok(response) => {
-                    retry_count = 0;
-                    response
+                    if response.status() == StatusCode::OK {
+                        response
+                    } else {
+                        return Err(DownloadError::ExceptionDuringDownload);
+                    }
                 },
                 Err(err) => {
                     retry_count += 1;
@@ -141,7 +150,7 @@ mod tests {
         let url = Url::parse("http://localhost:23333/image.jpg").unwrap();
         let request = Request::new(reqwest::Method::GET, url);
 
-        let (tx, rx) = watch::channel(DownloadEndCause::Finished);
+        let (tx, rx) = watch::channel(DownloadActionNotify::Error);
         chunk_item.download(request, rx.clone()).await.unwrap();
     }
 }

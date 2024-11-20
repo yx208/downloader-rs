@@ -9,6 +9,9 @@ pub enum DownloadError {
 
     #[error("IOError: {:?}", .0)]
     IOError(#[from] io::Error),
+
+    #[error("Exception during download")]
+    ExceptionDuringDownload,
 }
 
 /// 下载结束的原因
@@ -29,4 +32,10 @@ pub enum DownloadStartError {
 
     #[error("Directory does not exist")]
     DirectoryDoesNotExist,
+}
+
+#[derive(Debug, Clone)]
+pub enum DownloadActionNotify {
+    Notify(DownloadEndCause),
+    Error,
 }

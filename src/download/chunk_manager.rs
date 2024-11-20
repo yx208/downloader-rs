@@ -9,7 +9,7 @@ use tokio::fs::File;
 use tokio::sync::{watch, Mutex, RwLock};
 use crate::download::chunk_item::ChunkItem;
 use crate::download::chunk_range::ChunkRangeIterator;
-use crate::download::error::{DownloadEndCause, DownloadError};
+use crate::download::error::{DownloadActionNotify, DownloadEndCause, DownloadError};
 use crate::download::util::clone_request;
 
 type DownloadResultType = Result<DownloadEndCause, DownloadError>;
@@ -49,7 +49,8 @@ impl ChunkManager {
         &self,
         file: Arc<Mutex<File>>,
         request: Request,
-        action_receiver: watch::Receiver<DownloadEndCause>
+        action_receiver: watch::Receiver<DownloadActionNotify>,
+        action_sender: watch::Sender<DownloadActionNotify>,
     ) -> DownloadResultType {
         let mut futures_unordered = FuturesUnordered::new();
         let mut is_download_finished = false;
@@ -97,7 +98,14 @@ impl ChunkManager {
                 Ok(DownloadEndCause::Paused) => {
                     return Ok(DownloadEndCause::Paused);
                 }
-                Err(err) => return Err(err)
+                // 发生错误时通通知其他 chunk 停止下载
+                Err(err) => {
+                    match action_sender.send(DownloadActionNotify::Error) {
+                        Ok(_) => {}
+                        Err(_) => {}
+                    };
+                    return Err(err);
+                }
             }
         }
 
@@ -108,10 +116,9 @@ impl ChunkManager {
         &self,
         file: Arc<Mutex<File>>,
         request: Request,
-        action_receiver: watch::Receiver<DownloadEndCause>
+        action_receiver: watch::Receiver<DownloadActionNotify>
     ) -> Option<BoxFuture<(usize, DownloadResultType)>> {
         if let Some(chunk_info) = self.chunk_iter.next() {
-            println!("Chunk info: {:?}", chunk_info);
             let chunk_item = Arc::new(ChunkItem::new(
                 chunk_info,
                 file,
@@ -142,9 +149,9 @@ mod tests {
     use crate::download::util::get_file_length;
 
     async fn create_manager(url: Url) -> ChunkManager {
-        let content_length = get_file_length(url).await.unwrap();
+        // let content_length = get_file_length(url).await.unwrap();
         let chunk_size = NonZeroUsize::new(1024 * 1024 * 4).unwrap();
-        let chunk_data = ChunkData::new(chunk_size, content_length);
+        let chunk_data = ChunkData::new(chunk_size, 1024 * 1024 * 4 * 10);
         let chunk_iter = ChunkRangeIterator::new(chunk_data);
         let chunk_manager = ChunkManager::new(3, chunk_iter);
 
@@ -166,23 +173,26 @@ mod tests {
 
     #[tokio::test]
     async fn should_be_download() {
-        let url = Url::parse("http://localhost:23333/image.jpg").unwrap();
+        let url = Url::parse("http://localhost:23333/imageg.jpg").unwrap();
         let chunk_manager = create_manager(url.clone()).await;
         let file = Arc::new(Mutex::new(create_file().await));
-        let (tx, rx) = watch::channel(DownloadEndCause::Finished);
+        let (tx, rx) = watch::channel(
+            DownloadActionNotify::Notify(DownloadEndCause::Finished)
+        );
 
         let result = chunk_manager.download(
             file.clone(),
             Request::new(reqwest::Method::GET, url.clone()),
             rx.clone(),
+            tx.clone()
         );
 
         match result.await {
             Ok(download_end_cause) => {
-                println!("{:?}", download_end_cause);
+                println!("Success: {:?}", download_end_cause);
             }
             Err(err) => {
-                println!("{}", err);
+                println!("Error: {:?}", err);
             }
         }
     }
