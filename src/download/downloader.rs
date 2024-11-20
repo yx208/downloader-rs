@@ -8,6 +8,7 @@ use headers::HeaderMapExt;
 use reqwest::Request;
 use tokio::fs::OpenOptions;
 use tokio::sync::{watch};
+use tokio::sync::watch::error::SendError;
 use tokio::task::JoinHandle;
 use url::Url;
 use crate::download::chunk_manager::ChunkManager;
@@ -156,8 +157,13 @@ impl Downloader {
 
     }
 
-    pub fn cancel() {
-
+    pub fn cancel(&mut self) {
+        match self.action_sender.send(DownloadActionNotify::Notify(DownloadEndCause::Cancelled)) {
+            Ok(_) => {
+                self.chunk_manager.take();
+            }
+            Err(_) => {}
+        }
     }
 }
 
