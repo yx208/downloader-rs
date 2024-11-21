@@ -2,14 +2,15 @@ use std::collections::Bound;
 use std::num::NonZeroUsize;
 use std::ops::RangeBounds;
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkInfo {
     pub index: usize,
     pub range: ChunkRange,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ChunkRange {
     pub start: u64,
     pub end: u64,
@@ -43,71 +44,116 @@ impl<'a> RangeBounds<u64> for &'a ChunkRange {
     }
 }
 
-pub struct ChunkData {
-    iter_count: usize,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RemainingChunks {
     chunk_size: usize,
+    ranges: Vec<ChunkRange>
+}
+
+impl RemainingChunks {
+    pub fn new(chunk_size: NonZeroUsize, content_length: u64) -> Self {
+        Self {
+            chunk_size: chunk_size.get(),
+            ranges: vec![ChunkRange::from_len(0, content_length)]
+        }
+    }
+
+    pub fn next(&mut self) -> Option<ChunkRange> {
+        let chunk_size = self.chunk_size as u64;
+        match self.ranges.first().map(|range| range.to_owned()) {
+            None => None,
+            Some(range) => {
+                let len = match range.len() {
+                    0 => {
+                        self.ranges.remove(0);
+                        return self.next();
+                    }
+                    len if len <= chunk_size => {
+                        self.ranges.remove(0);
+                        len
+                    }
+                    _ => {
+                        self.ranges[0] = ChunkRange::new(range.start + chunk_size, range.end);
+                        chunk_size
+                    }
+                };
+
+                Some(ChunkRange::from_len(range.start, len))
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ChunkData {
+    pub iter_count: usize,
     // 文件还剩余下载的部分范围
-    remaining: Option<ChunkRange>,
-    last_incomplete_chunks: Vec<ChunkInfo>,
+    pub remaining: RemainingChunks,
+    pub last_incomplete_chunks: Vec<ChunkInfo>,
 }
 
 impl ChunkData {
     pub fn new(chunk_size: NonZeroUsize, content_length: u64) -> Self {
         Self {
             iter_count: 0,
-            chunk_size: chunk_size.get(),
-            remaining: Some(ChunkRange::from_len(0, content_length)),
+            remaining: RemainingChunks::new(chunk_size, content_length),
             last_incomplete_chunks: Vec::new(),
         }
     }
 
-    pub fn next(&mut self) -> Option<ChunkInfo> {
-        let chunk_size = self.chunk_size as u64;
-        match &self.remaining {
-            None => None,
-            Some(remaining) => {
-                let remaining = remaining.clone();
-                let len = match remaining.len() {
-                    0 => {
-                        return None;
-                    }
-                    // 最后一个 chunk 的大小
-                    len if len <= chunk_size => {
-                        self.remaining = None;
-                        len
-                    },
-                    // 大于一个 chunk 的情况
-                    _ => {
-                        self.remaining = Some(ChunkRange::new(remaining.start + chunk_size, remaining.end));
-                        chunk_size
-                    }
-                };
+    /// 获取剩余的字节
+    pub fn remaining_len(&self) -> u64 {
+        let mut len = 0;
 
-                self.iter_count += 1;
-                Some(ChunkInfo {
-                    index: self.iter_count,
-                    range: ChunkRange::from_len(remaining.start, len)
-                })
-            }
+        for range in &self.remaining.ranges {
+            len += range.len();
+        }
+
+        for info in &self.last_incomplete_chunks {
+            len += info.range.len();
+        }
+
+        len
+    }
+
+    pub fn next(&mut self) -> Option<ChunkInfo> {
+        if let Some(chunk_info) = self.last_incomplete_chunks.pop() {
+            return Some(chunk_info);
+        }
+
+        let range = self.remaining.next();
+        if let Some(range) = range {
+            self.iter_count += 1;
+
+            let result = ChunkInfo {
+                index: self.iter_count,
+                range
+            };
+
+            println!("{:?}", result);
+
+            Some(result)
+        } else {
+            None
         }
     }
 }
 
 pub struct ChunkRangeIterator {
-    chunk_data: Arc<parking_lot::RwLock<ChunkData>>
+    pub data: Arc<parking_lot::RwLock<ChunkData>>
 }
 
 impl ChunkRangeIterator {
     pub fn new(chunk_data: ChunkData) -> Self {
         Self {
-            chunk_data: Arc::new(
+            data: Arc::new(
                 parking_lot::RwLock::new(chunk_data)
             )
         }
     }
 
     pub fn next(&self) -> Option<ChunkInfo> {
-        let mut chunk_data = self.chunk_data.write();
+        let mut chunk_data = self.data.write();
         chunk_data.next()
     }
 }

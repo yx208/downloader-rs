@@ -10,6 +10,7 @@ use tokio::fs::OpenOptions;
 use tokio::sync::{watch};
 use tokio::task::JoinHandle;
 use url::Url;
+use crate::download::archiver::Archiver;
 use crate::download::chunk_manager::ChunkManager;
 use crate::download::chunk_range::{ChunkData, ChunkRangeIterator};
 use crate::download::error::{DownloadActionNotify, DownloadEndCause, DownloadError, DownloadStartError};
@@ -18,12 +19,12 @@ use crate::download::util::get_file_length;
 type DownloadResult = Result<DownloadEndCause, DownloadError>;
 
 pub struct DownloaderConfig {
-    url: Url,
-    save_dir: PathBuf,
-    file_name: String,
-    chunk_size: NonZeroUsize,
-    connection_count: NonZeroU8,
-    retry_count: u8,
+    pub url: Url,
+    pub save_dir: PathBuf,
+    pub file_name: String,
+    pub chunk_size: NonZeroUsize,
+    pub concurrent: NonZeroU8,
+    pub retry_count: u8,
 }
 
 impl DownloaderConfig {
@@ -49,42 +50,43 @@ impl DownloaderConfig {
 }
 
 pub struct Downloader {
-    config: Arc<DownloaderConfig>,
     chunk_manager: Option<Arc<ChunkManager>>,
     // 发送接收 pause/cancel 指令
-    action_sender: watch::Sender<DownloadActionNotify>,
-    action_receiver: watch::Receiver<DownloadActionNotify>,
+    action_sender: Option<watch::Sender<DownloadActionNotify>>,
+    action_receiver: Option<watch::Receiver<DownloadActionNotify>>,
     // 发送接收数据接收长度
     downloaded_len_sender: watch::Sender<u64>,
     downloaded_len_receiver: watch::Receiver<u64>,
 
-    listen_len_change_handle: Option<JoinHandle<()>>
+    pub content_length: Option<u64>,
+    listen_len_change_handle: Option<JoinHandle<()>>,
+    archiver: Option<Archiver>
 }
 
 impl Downloader {
-    pub fn new(config: DownloaderConfig) -> Self {
-        let (
-            action_sender,
-            action_receiver
-        ) = watch::channel(DownloadActionNotify::Notify(DownloadEndCause::Finished));
-        let (
-            downloaded_len_sender,
-            downloaded_len_receiver
-        ) = watch::channel(0);
+    pub fn new() -> Self {
+        let (tx, rx) = watch::channel(0);
 
         Self {
-            action_sender,
-            action_receiver,
-            downloaded_len_sender,
-            downloaded_len_receiver,
+            action_sender: None,
+            action_receiver: None,
             chunk_manager: None,
             listen_len_change_handle: None,
-            config: Arc::new(config),
+            content_length: None,
+            archiver: None,
+            downloaded_len_sender: tx,
+            downloaded_len_receiver: rx,
         }
     }
 
-    fn file_path(&self) -> PathBuf {
-        self.config.save_dir.join(&self.config.file_name)
+    /// 拷贝一份 chunk 下载数据
+    pub fn clone_chunk_data(&self) -> Option<ChunkData> {
+        if let Some(chunk_manager) = &self.chunk_manager {
+            let data = chunk_manager.chunk_iter.data.read();
+            Some(data.clone())
+        } else {
+            None
+        }
     }
 
     pub fn downloaded_len_stream(&self) -> impl Stream<Item=u64> + 'static {
@@ -101,36 +103,34 @@ impl Downloader {
         }
     }
 
-    pub async fn download(&mut self) -> Result<impl Future<Output=DownloadResult>, DownloadStartError> {
+    pub async fn download(&mut self, config: Arc<DownloaderConfig>, archiver: Option<Archiver>)
+        -> Result<impl Future<Output=DownloadResult>, DownloadStartError>
+    {
         if self.chunk_manager.is_some() {
             return Err(DownloadStartError::AlreadyDownloading);
         }
 
-        if !self.config.save_dir.exists() {
+        if !config.save_dir.exists() {
            return Err(DownloadStartError::DirectoryDoesNotExist);
         }
 
-        Ok(self.run_download().await)
-    }
+        // 重置 watch 状态
+        let (tx, rx) = watch::channel(DownloadActionNotify::Notify(DownloadEndCause::Finished));
+        self.action_sender = Some(tx.clone());
+        self.action_receiver = Some(rx.clone());
 
-    async fn run_download(&mut self) -> impl Future<Output=DownloadResult> {
-        let content_length = get_file_length(self.config.url.clone()).await.unwrap();
-        let chunk_data = ChunkData::new(self.config.chunk_size.clone(), content_length);
+        let file_path = config.file_path();
+        let len_sender = self.downloaded_len_sender.clone();
+        let content_length = get_file_length(config.url.clone()).await.unwrap();
+
+        let chunk_data = ChunkData::new(config.chunk_size.clone(), content_length);
         let iter = ChunkRangeIterator::new(chunk_data);
-        let chunk_manager = Arc::new(ChunkManager::new(
-            self.config.connection_count.get(),
-            iter,
-            self.action_sender.clone(),
-            self.action_receiver.clone()
-        ));
+        let chunk_manager = Arc::new(ChunkManager::new(config.concurrent.get(), iter, tx, rx));
 
         self.chunk_manager = Some(chunk_manager.clone());
+        self.content_length = Some(content_length);
 
-        let file_path = self.file_path();
-        let config = self.config.clone();
-        let len_sender = self.downloaded_len_sender.clone();
-
-        async move {
+        let future = async move {
             let file = OpenOptions::new()
                 .create(true)
                 .write(true)
@@ -145,60 +145,52 @@ impl Downloader {
             ).await;
 
             result
-        }
+        };
+
+        Ok(future)
     }
 
     fn is_downloading(&self) -> bool {
         self.chunk_manager.is_some()
     }
 
-    pub fn pause(&mut self) {
-        match self.action_sender.send(DownloadActionNotify::Notify(DownloadEndCause::Paused)) {
-            Ok(_) => {
-                self.chunk_manager.take();
+    pub fn exec(&mut self, action: DownloadEndCause) -> Result<Arc<ChunkManager>, ()> {
+        if let Some(sender) = self.action_sender.take() {
+            sender.send(DownloadActionNotify::Notify(action)).unwrap();
+            match self.chunk_manager.take() {
+                None => Err(()),
+                Some(r) => Ok(r)
             }
-            Err(_) => {}
-        }
-    }
-
-    pub fn cancel(&mut self) {
-        match self.action_sender.send(DownloadActionNotify::Notify(DownloadEndCause::Cancelled)) {
-            Ok(_) => {
-                self.chunk_manager.take();
-            }
-            Err(_) => {}
+        } else {
+            Err(())
         }
     }
 }
 
 mod tests {
-    use tokio::sync::Mutex;
     use super::*;
+    use tokio::sync::Mutex;
 
-    async fn create_downloader() -> Downloader {
-        let download_dir = dirs::download_dir().unwrap();
-        let config = DownloaderConfig {
+    fn creat_config() -> DownloaderConfig {
+        DownloaderConfig {
             retry_count: 3,
-            url: Url::parse("https://tasset.xgy.tv/down/resources/agency/CeShiJiGou_1/HouDuanBuMen_3/dc9152119c160a601e5f684795fb4ea2_16/20241107/150942e889862aa83534036990.mkv").unwrap(),
-            save_dir: download_dir,
-            file_name: "demo.mkv".to_string(),
+            url: Url::parse("https://tasset.xgy.tv/down/resources/agency/CeShiJiGou_1/QianDuanBuMen_2/dc9152119c160a601e5f684795fb4ea2_16/20241118/18154964fcaafce36522519013.mp4").unwrap(),
+            save_dir: dirs::download_dir().unwrap(),
+            file_name: "demo.mp4".to_string(),
             chunk_size: NonZeroUsize::new(1024 * 1024 * 4).unwrap(),
-            connection_count: NonZeroU8::new(3).unwrap(),
-        };
-        let downloader = Downloader::new(config);
-
-        downloader
+            concurrent: NonZeroU8::new(3).unwrap(),
+        }
     }
 
     #[tokio::test]
-    async fn should_be_pause() {
-        let downloader = Arc::new(Mutex::new(create_downloader().await));
+    async fn should_be_pause() -> Result<()> {
+        Ok(())
     }
 
     #[tokio::test]
     async fn should_be_cancel() {
-        let downloader = create_downloader().await;
-        let downloader = Arc::new(Mutex::new(downloader));
+        let downloader = Arc::new(Mutex::new(Downloader::new()));
+        let config = Arc::new(creat_config());
 
         let downloader_clone = downloader.clone();
         tokio::spawn(async move {
@@ -209,7 +201,7 @@ mod tests {
 
         let future = {
             let mut guard = downloader.lock().await;
-            guard.download().await
+            guard.download(config.clone(), None).await
         };
 
         match future {
@@ -231,9 +223,10 @@ mod tests {
 
     #[tokio::test]
     async fn should_be_download() {
-        let mut downloader = create_downloader().await;
+        let mut downloader = Downloader::new();
+        let config = Arc::new(creat_config());
 
-        match downloader.download().await {
+        match downloader.download(config, None).await {
             Ok(future) => {
                 match future.await {
                     Ok(download_end_cause) => {

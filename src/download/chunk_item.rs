@@ -19,7 +19,7 @@ pub struct ChunkItem {
     client: Client,
     file: Arc<Mutex<File>>,
     retry_count: u8,
-    downloaded: AtomicU64,
+    pub downloaded: AtomicU64,
     pub chunk_info: ChunkInfo
 }
 
@@ -88,6 +88,8 @@ impl ChunkItem {
                 Ok(DownloadEndCause::Finished)
             }
             _ = action_receiver.changed() => {
+                println!("接收到 change");
+
                 let action = action_receiver.borrow_and_update().clone();
                 match action {
                     DownloadActionNotify::Error => {

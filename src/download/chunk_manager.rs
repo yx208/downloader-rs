@@ -15,10 +15,10 @@ use crate::download::util::clone_request;
 type DownloadResultType = Result<DownloadEndCause, DownloadError>;
 
 pub struct ChunkManager {
-    chunk_iter: ChunkRangeIterator,
     client: Client,
     connection_count: u8,
-    downloading_chunks: RwLock<HashMap<usize, Arc<ChunkItem>>>,
+    pub chunk_iter: ChunkRangeIterator,
+    pub downloading_chunks: RwLock<HashMap<usize, Arc<ChunkItem>>>,
     action_receiver: watch::Receiver<DownloadActionNotify>,
     action_sender: watch::Sender<DownloadActionNotify>,
 }
@@ -54,8 +54,12 @@ impl ChunkManager {
         guard.len()
     }
 
-    fn downloaded_length(&self) {
+    pub async fn get_downloading_chunks(&self) -> Vec<Arc<ChunkItem>> {
+        let chunks = self.downloading_chunks.read().await;
+        let mut chunks: Vec<_> = chunks.values().cloned().collect();
+        chunks.sort_by(|a, b| a.chunk_info.range.start.cmp(&b.chunk_info.range.start));
 
+        chunks
     }
 
     pub async fn download(
