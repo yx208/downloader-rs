@@ -8,7 +8,6 @@ use headers::HeaderMapExt;
 use reqwest::Request;
 use tokio::fs::OpenOptions;
 use tokio::sync::{watch};
-use tokio::sync::watch::error::SendError;
 use tokio::task::JoinHandle;
 use url::Url;
 use crate::download::chunk_manager::ChunkManager;
@@ -153,8 +152,13 @@ impl Downloader {
         self.chunk_manager.is_some()
     }
 
-    pub fn pause() {
-
+    pub fn pause(&mut self) {
+        match self.action_sender.send(DownloadActionNotify::Notify(DownloadEndCause::Paused)) {
+            Ok(_) => {
+                self.chunk_manager.take();
+            }
+            Err(_) => {}
+        }
     }
 
     pub fn cancel(&mut self) {
@@ -168,20 +172,66 @@ impl Downloader {
 }
 
 mod tests {
+    use tokio::sync::Mutex;
     use super::*;
 
-    #[tokio::test]
-    async fn should_be_download() {
+    async fn create_downloader() -> Downloader {
         let download_dir = dirs::download_dir().unwrap();
         let config = DownloaderConfig {
             retry_count: 3,
-            url: Url::parse("http://localhost:23333/image.jpg").unwrap(),
+            url: Url::parse("https://tasset.xgy.tv/down/resources/agency/CeShiJiGou_1/HouDuanBuMen_3/dc9152119c160a601e5f684795fb4ea2_16/20241107/150942e889862aa83534036990.mkv").unwrap(),
             save_dir: download_dir,
-            file_name: "demo.jpg".to_string(),
+            file_name: "demo.mkv".to_string(),
             chunk_size: NonZeroUsize::new(1024 * 1024 * 4).unwrap(),
             connection_count: NonZeroU8::new(3).unwrap(),
         };
-        let mut downloader = Downloader::new(config);
+        let downloader = Downloader::new(config);
+
+        downloader
+    }
+
+    #[tokio::test]
+    async fn should_be_pause() {
+        let downloader = Arc::new(Mutex::new(create_downloader().await));
+    }
+
+    #[tokio::test]
+    async fn should_be_cancel() {
+        let downloader = create_downloader().await;
+        let downloader = Arc::new(Mutex::new(downloader));
+
+        let downloader_clone = downloader.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            let mut guard = downloader_clone.lock().await;
+            guard.cancel();
+        });
+
+        let future = {
+            let mut guard = downloader.lock().await;
+            guard.download().await
+        };
+
+        match future {
+            Ok(future) => {
+                match future.await {
+                    Ok(download_end_cause) => {
+                        println!("Successful: {:?}", download_end_cause);
+                    }
+                    Err(err) => {
+                        println!("Download error: {}", err);
+                    }
+                }
+            }
+            Err(err) => {
+                println!("Start error: {}", err);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn should_be_download() {
+        let mut downloader = create_downloader().await;
 
         match downloader.download().await {
             Ok(future) => {
