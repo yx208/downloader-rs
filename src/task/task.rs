@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use futures_util::FutureExt;
 use uuid::Uuid;
 use crate::download::archiver::Archiver;
 use crate::download::chunk_range::{ChunkInfo, ChunkRange};
@@ -13,19 +14,20 @@ pub enum DownloadStatus {
     Pending,
     Running,
     Paused,
-    Cancelled
+    Cancelled,
+    Finished
 }
 
 pub struct DownloadTask {
-    id: Uuid,
-    status:DownloadStatus,
+    pub id: Uuid,
+    status: DownloadStatus,
     downloader: Option<Downloader>,
     archiver: Option<Archiver>,
     config: Arc<DownloaderConfig>
 }
 
 impl DownloadTask {
-    pub fn new(id: Uuid, config: DownloaderConfig, ) -> Self {
+    pub fn new(id: Uuid, config: DownloaderConfig) -> Self {
         Self {
             id,
             status: DownloadStatus::Pending,
@@ -72,10 +74,9 @@ impl DownloadTask {
         }
     }
 
+    /// 想要下载就要通过这里
+    /// 无论执行 pause 还是 cancel 都会销毁 downloader
     pub async fn download(&mut self) -> Result<impl Future<Output=DownloadResultType>, DownloadStartError> {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Uuid>(32);
-        tx.send(self.id).await.unwrap();
-
         let mut downloader = Downloader::new();
         let archiver = {
             if self.archiver.is_some() {
@@ -96,6 +97,10 @@ impl DownloadTask {
 
     pub async fn cancel(&mut self) {
         self.exec(DownloadEndCause::Cancelled).await;
+    }
+
+    pub fn change_status(&mut self, status: DownloadStatus) {
+        self.status = status;
     }
 }
 

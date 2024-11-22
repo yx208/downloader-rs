@@ -4,10 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use anyhow::Result;
 use futures_util::{Stream, StreamExt};
+use futures_util::future::BoxFuture;
 use headers::HeaderMapExt;
 use reqwest::Request;
 use tokio::fs::OpenOptions;
-use tokio::sync::{watch};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use url::Url;
 use uuid::Uuid;
@@ -70,7 +71,7 @@ impl DownloaderConfig {
 
 pub struct Downloader {
     chunk_manager: Option<Arc<ChunkManager>>,
-    // 发送接收 pause/cancel 指令
+    // 发送接收 pause/cancel 信号
     action_sender: Option<watch::Sender<DownloadActionNotify>>,
     action_receiver: Option<watch::Receiver<DownloadActionNotify>>,
     // 发送接收数据接收长度
@@ -79,7 +80,7 @@ pub struct Downloader {
 
     pub content_length: Option<u64>,
     listen_len_change_handle: Option<JoinHandle<()>>,
-    archiver: Option<Archiver>
+    archiver: Option<Archiver>,
 }
 
 impl Downloader {
@@ -122,6 +123,11 @@ impl Downloader {
         }
     }
 
+    /// 执行下载
+    ///
+    /// ## Params
+    ///
+    /// config: 下载配置, archiver: 下载断点恢复信息
     pub async fn download(&mut self, config: Arc<DownloaderConfig>, archiver: Option<&Archiver>)
         -> Result<impl Future<Output=DownloadResult>, DownloadStartError>
     {
@@ -191,14 +197,8 @@ mod tests {
     use tokio::sync::Mutex;
 
     fn creat_config() -> DownloaderConfig {
-        DownloaderConfig {
-            retry_count: 3,
-            url: Url::parse("https://tasset.xgy.tv/down/resources/agency/CeShiJiGou_1/QianDuanBuMen_2/dc9152119c160a601e5f684795fb4ea2_16/20241118/18154964fcaafce36522519013.mp4").unwrap(),
-            save_dir: dirs::download_dir().unwrap(),
-            file_name: "demo.mp4".to_string(),
-            chunk_size: NonZeroUsize::new(1024 * 1024 * 4).unwrap(),
-            concurrent: NonZeroU8::new(3).unwrap(),
-        }
+        let url = Url::parse("https://tasset.xgy.tv/down/resources/agency/CeShiJiGou_1/QianDuanBuMen_2/dc9152119c160a601e5f684795fb4ea2_16/20241118/18154964fcaafce36522519013.mp4").unwrap();
+        DownloaderConfig::from_url(url)
     }
 
     #[tokio::test]
@@ -215,7 +215,7 @@ mod tests {
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             let mut guard = downloader_clone.lock().await;
-            guard.cancel();
+            guard.exec(DownloadEndCause::Cancelled).unwrap();
         });
 
         let future = {
