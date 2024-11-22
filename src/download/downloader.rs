@@ -10,6 +10,7 @@ use tokio::fs::OpenOptions;
 use tokio::sync::{watch};
 use tokio::task::JoinHandle;
 use url::Url;
+use uuid::Uuid;
 use crate::download::archiver::Archiver;
 use crate::download::chunk_manager::ChunkManager;
 use crate::download::chunk_range::{ChunkData, ChunkRangeIterator};
@@ -28,6 +29,24 @@ pub struct DownloaderConfig {
 }
 
 impl DownloaderConfig {
+    /// 只提供基础信息进行创建
+    pub fn from_url(url: Url) -> Self {
+        let file_name = if let Some(segments) = url.path_segments() {
+            segments.last().unwrap().to_string()
+        } else {
+            Uuid::new_v4().to_string()
+        };
+
+        Self {
+            url,
+            file_name,
+            retry_count: 3,
+            save_dir: dirs::download_dir().unwrap(),
+            chunk_size: NonZeroUsize::new(1024 * 1024 * 4).unwrap(),
+            concurrent: NonZeroU8::new(3).unwrap(),
+        }
+    }
+
     pub fn create_http_request(&self) -> Request {
         let mut request = Request::new(reqwest::Method::GET, self.url.clone());
         let header_map = request.headers_mut();
@@ -103,7 +122,7 @@ impl Downloader {
         }
     }
 
-    pub async fn download(&mut self, config: Arc<DownloaderConfig>, archiver: Option<Archiver>)
+    pub async fn download(&mut self, config: Arc<DownloaderConfig>, archiver: Option<&Archiver>)
         -> Result<impl Future<Output=DownloadResult>, DownloadStartError>
     {
         if self.chunk_manager.is_some() {

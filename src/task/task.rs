@@ -1,22 +1,35 @@
+use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;
 use crate::download::archiver::Archiver;
 use crate::download::chunk_range::{ChunkInfo, ChunkRange};
 use crate::download::downloader::{Downloader, DownloaderConfig};
-use crate::download::error::{DownloadEndCause};
+use crate::download::error::{DownloadEndCause, DownloadError, DownloadStartError};
+
+type DownloadResultType = Result<DownloadEndCause, DownloadError>;
+
+pub enum DownloadStatus {
+    Pending,
+    Running,
+    Paused,
+    Cancelled
+}
 
 pub struct DownloadTask {
     id: Uuid,
+    status:DownloadStatus,
     downloader: Option<Downloader>,
     archiver: Option<Archiver>,
-    config: DownloaderConfig
+    config: Arc<DownloaderConfig>
 }
 
 impl DownloadTask {
-    pub fn new(id: Uuid, config: DownloaderConfig) -> Self {
+    pub fn new(id: Uuid, config: DownloaderConfig, ) -> Self {
         Self {
             id,
-            config,
+            status: DownloadStatus::Pending,
+            config: Arc::new(config),
             downloader: None,
             archiver: None,
         }
@@ -57,6 +70,24 @@ impl DownloadTask {
                 chunk_data: Some(chunk_data),
             });
         }
+    }
+
+    pub async fn download(&mut self) -> Result<impl Future<Output=DownloadResultType>, DownloadStartError> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Uuid>(32);
+        tx.send(self.id).await.unwrap();
+
+        let mut downloader = Downloader::new();
+        let archiver = {
+            if self.archiver.is_some() {
+                Some(self.archiver.as_ref().unwrap())
+            } else {
+                None
+            }
+        };
+        let future = downloader.download(self.config.clone(), archiver).await;
+        self.downloader = Some(downloader);
+
+        future
     }
 
     pub async fn pause(&mut self) {
